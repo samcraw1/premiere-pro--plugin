@@ -33,24 +33,27 @@ function App() {
 
     try {
       const response = await fetch(
-        `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&per_page=12`,
-        { headers: { Authorization: import.meta.env.VITE_PEXELS_API_KEY } }
+        `http://localhost:3000/search?term=${encodeURIComponent(query)}`
       )
 
       if (!response.ok) {
-        throw new Error(`Pexels API error: ${response.status}`)
+        throw new Error(`Search request failed: ${response.status}`)
       }
 
       const data = await response.json()
 
-      const results: Video[] = data.videos.map((video: any) => {
-        const file = video.video_files.find((f: any) => f.quality === 'sd') ?? video.video_files[0]
+      const results: Video[] = data.hits.map((hit: any) => {
+        const files = hit.videos ?? {}
+        const file = files.medium ?? files.large ?? files.small ?? files.tiny
+        const firstTags = hit.tags
+          ? hit.tags.split(',').slice(0, 3).map((tag: string) => tag.trim()).join(', ')
+          : `Video by ${hit.user}`
         return {
-          id: video.id,
-          title: video.user?.name ? `Video by ${video.user.name}` : `Video ${video.id}`,
-          url: file?.link ?? '',
-          duration: video.duration,
-          thumbnail: video.image,
+          id: hit.id,
+          title: firstTags,
+          url: file?.url ?? '',
+          duration: hit.duration,
+          thumbnail: file?.thumbnail ?? '',
         }
       })
 
