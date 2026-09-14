@@ -23,6 +23,8 @@ function App() {
   const [previewVideo, setPreviewVideo] = useState<Video | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [importingId, setImportingId] = useState<number | null>(null)
+  const [importProgress, setImportProgress] = useState<number | null>(null)
 
   async function searchVideo() {
     if (query.trim() === "")
@@ -67,15 +69,74 @@ function App() {
     }
   }
 
-  function handleImport(video: Video) {
-    console.log("Import clicked", video)
-    setDownloadedVideos((currentVideos) => {
-      if (currentVideos.some((v) => v.id === video.id)) {
-        console.log("Video already imported", video)
-        return currentVideos
+  async function handleImport(video: Video) {
+    if (downloadedVideos.some((v) => v.id === video.id)) {
+      console.log("Video already imported", video)
+      return
+    }
+
+    setImportingId(video.id)
+    setImportProgress(0)
+    setError(null)
+
+    try {
+      const response = await fetch("http://localhost:3000/download", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: video.url }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error ?? `Download failed: ${response.status}`)
       }
-      return [...currentVideos, video]
-    })
+
+      if (!response.body) {
+        throw new Error("Download response had no body")
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      let result: { filename: string; filePath: string } | null = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          const message = JSON.parse(line)
+
+          if (message.type === "progress") {
+            setImportProgress(message.percent)
+          } else if (message.type === "converting") {
+            setImportProgress(null)
+          } else if (message.type === "done") {
+            result = message
+          } else if (message.type === "error") {
+            throw new Error(message.message)
+          }
+        }
+      }
+
+      if (!result) {
+        throw new Error("Download did not complete")
+      }
+
+      console.log("Downloaded to", result.filePath)
+      setDownloadedVideos((currentVideos) => [...currentVideos, { ...video, url: result!.filePath }])
+    } catch (err) {
+      console.error(err)
+      setError("Failed to download video.")
+    } finally {
+      setImportingId(null)
+      setImportProgress(null)
+    }
   }
 
 
@@ -90,6 +151,7 @@ function App() {
       type="text"
       value={query}
       onChange={(event) => setQuery(event.target.value)}
+
       placeholder="Search for a video"
     />
 
@@ -112,7 +174,11 @@ function App() {
         />
         <p>Duration: {formatDuration(previewVideo.duration)}</p>
         <div className="preview-actions">
-          <button className="btn btn--primary" onClick={() => handleImport(previewVideo)}>Import</button>
+          <button className="btn btn--primary" onClick={() => handleImport(previewVideo)} disabled={importingId === previewVideo.id}>
+            {importingId === previewVideo.id
+              ? (importProgress !== null ? `Importing... ${importProgress}%` : "Converting...")
+              : "Import"}
+          </button>
           <button className="btn" onClick={() => setPreviewVideo(null)}>Close Preview</button>
         </div>
       </section>
@@ -150,7 +216,11 @@ function App() {
           <p>Duration: {formatDuration(video.duration)}</p>
           <div className="card-actions">
             <button className="btn" onClick={() => setPreviewVideo(video)}>Preview</button>
-            <button className="btn btn--primary" onClick={() => handleImport(video)}>Import</button>
+            <button className="btn btn--primary" onClick={() => handleImport(video)} disabled={importingId === video.id}>
+              {importingId === video.id
+                ? (importProgress !== null ? `Importing... ${importProgress}%` : "Converting...")
+                : "Import"}
+            </button>
           </div>
         </article>
       ))}
