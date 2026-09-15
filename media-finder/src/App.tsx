@@ -2,7 +2,7 @@ import './App.css'
 import  { useState } from 'react'
 
 type Video = {
-  id: number
+  id: string
   title: string
   url: string
   duration: number
@@ -23,7 +23,7 @@ function App() {
   const [previewVideo, setPreviewVideo] = useState<Video | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [importingId, setImportingId] = useState<number | null>(null)
+  const [importingId, setImportingId] = useState<string | null>(null)
   const [importProgress, setImportProgress] = useState<number | null>(null)
 
   async function searchVideo() {
@@ -44,22 +44,7 @@ function App() {
 
       const data = await response.json()
 
-      const results: Video[] = data.hits.map((hit: any) => {
-        const files = hit.videos ?? {}
-        const file = files.medium ?? files.large ?? files.small ?? files.tiny
-        const firstTags = hit.tags
-          ? hit.tags.split(',').slice(0, 3).map((tag: string) => tag.trim()).join(', ')
-          : `Video by ${hit.user}`
-        return {
-          id: hit.id,
-          title: firstTags,
-          url: file?.url ?? '',
-          duration: hit.duration,
-          thumbnail: file?.thumbnail ?? '',
-        }
-      })
-
-      setVideos(results)
+      setVideos(data.results as Video[])
     } catch (err) {
       console.error(err)
       setError("Something went wrong fetching videos.")

@@ -38,20 +38,12 @@ export const App = () => {
 
       const data = await response.json()
 
-      const results = data.hits.map((hit) => {
-        const files = hit.videos ?? {}
-        const file = files.medium ?? files.large ?? files.small ?? files.tiny
-        const firstTags = hit.tags
-          ? hit.tags.split(',').slice(0, 3).map((tag) => tag.trim()).join(', ')
-          : `Video by ${hit.user}`
-        return {
-          id: hit.id,
-          title: firstTags,
-          url: file?.url ?? '',
-          duration: hit.duration,
-          thumbnail: file?.thumbnail ? `${SERVER_URL}/thumbnail?url=${encodeURIComponent(file.thumbnail)}` : '',
-        }
-      })
+      // UXP's webview can't load YouTube thumbnail images cross-origin
+      // directly, so route them through the server's /thumbnail proxy.
+      const results = data.results.map((video) => ({
+        ...video,
+        thumbnail: video.thumbnail ? `${SERVER_URL}/thumbnail?url=${encodeURIComponent(video.thumbnail)}` : '',
+      }))
 
       setVideos(results)
     } catch (err) {

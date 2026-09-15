@@ -10,7 +10,7 @@
   },
   "requiredPermissions": {
     "network": {
-      "domains": ["http://localhost:3000", "https://cdn.pixabay.com/"]
+      "domains": ["http://localhost:3000"]
     }
   },
   "entrypoints": [
