@@ -107,6 +107,12 @@ export const App = () => {
 
       console.log("Downloaded to", result.filePath)
       setDownloadedVideos((currentVideos) => [...currentVideos, { ...video, url: result.filePath }])
+      const premierepro = require("premierepro")
+      const project = await premierepro.Project.getActiveProject()
+      if(!project){
+        throw new Error("no active premiere pro project - open a project first")
+      }
+      await project.importFiles([result.filePath], true, null, false)
     } catch (err) {
       console.error(err)
       setError("Failed to download video.")

@@ -12,7 +12,8 @@ module.exports = {
     devtool: 'eval-cheap-source-map', // won't work on XD due to lack of eval
     externals: {
         uxp: 'commonjs2 uxp',
-        os: 'commonjs2 os'
+        os: 'commonjs2 os',
+        premierepro: 'commonjs2 premierepro'
     },
     resolve: {
         extensions: [".js", ".jsx"]
