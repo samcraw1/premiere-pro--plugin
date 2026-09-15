@@ -1,0 +1,24 @@
+.panel { display: flex; flex-direction: column; gap: 12px; padding: 10px; }
+
+.search-row { display: flex; gap: 6px; }
+.search-input { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 2px; }
+.search-input::placeholder { color: var(--text-dim); }
+.search-input:focus { outline: none; border-color: var(--accent); }
+
+.btn { padding: 5px 10px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 2px; cursor: pointer; white-space: nowrap; }
+.btn:hover { background: var(--surface-h); }
+.btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.btn--primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+.btn--primary:hover { background: var(--accent-h); }
+
+.grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.card { display: flex; flex-direction: column; gap: 6px; padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; flex: 1 1 140px; }
+.thumb { display: block; width: 100%; height: 90px; object-fit: cover; border-radius: 2px; background: #000; }
+.card h3 { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.card p { color: var(--text-dim); font-size: 11px; }
+.card-actions { display: flex; gap: 4px; margin-top: auto; }
+.card-actions .btn { flex: 1; padding: 4px 6px; }
+
+.preview { display: flex; flex-direction: column; gap: 8px; padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; }
+.preview .thumb { max-width: 320px; }
+.preview-actions { display: flex; gap: 6px; }

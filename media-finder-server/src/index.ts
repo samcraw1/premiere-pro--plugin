@@ -59,12 +59,10 @@ app.post("/download", async (request, response) => {
     const total = Number(videoResponse.headers.get("content-length")) || 0;
     const isAlreadyMp4 = (videoResponse.headers.get("content-type") ?? "").includes("mp4");
     const downloadId = Date.now();
-    const finalFilename = `${downloadId}.mp4`;
-    const finalPath = path.join(downloadsDir, finalFilename);
-    const downloadPath = isAlreadyMp4 ? finalPath : path.join(downloadsDir, `${downloadId}-source`);
+    const rawPath = path.join(downloadsDir, `${downloadId}-raw.mp4`);
 
     try {
-        const fileHandle = await fs.open(downloadPath, "w");
+        const fileHandle = await fs.open(rawPath, "w");
         const reader = videoResponse.body.getReader();
         let received = 0;
 
@@ -81,18 +79,56 @@ app.post("/download", async (request, response) => {
 
         await fileHandle.close();
 
+        let finalPath = rawPath;
+        let filename = `${downloadId}-raw.mp4`;
+
         if (!isAlreadyMp4) {
             response.write(JSON.stringify({ type: "converting" }) + "\n");
-            await convertToMp4(downloadPath, finalPath);
-            await fs.unlink(downloadPath);
+            const convertedPath = path.join(downloadsDir, `${downloadId}.mp4`);
+            await convertToMp4(rawPath, convertedPath);
+            await fs.unlink(rawPath);
+            finalPath = convertedPath;
+            filename = `${downloadId}.mp4`;
         }
 
-        response.write(JSON.stringify({ type: "done", filename: finalFilename, filePath: finalPath }) + "\n");
+        response.write(JSON.stringify({ type: "done", filename, filePath: finalPath }) + "\n");
         response.end();
     } catch (error) {
         console.error(error);
         response.write(JSON.stringify({ type: "error", message: "Failed to download video" }) + "\n");
         response.end();
+    }
+});
+
+app.get("/thumbnail", async (request, response) => {
+    const url = request.query.url;
+    if (!url || typeof url !== "string") {
+        return response.status(400).json({ error: "Image URL is required" });
+    }
+
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return response.status(400).json({ error: "Invalid URL" });
+    }
+    if (!parsed.hostname.endsWith("pixabay.com")) {
+        return response.status(400).json({ error: "Unsupported image host" });
+    }
+
+    try {
+        const imageResponse = await fetch(url);
+        if (!imageResponse.ok) {
+            return response.status(502).json({ error: "Failed to fetch image" });
+        }
+        const contentType = imageResponse.headers.get("content-type") ?? "image/jpeg";
+        const buffer = Buffer.from(await imageResponse.arrayBuffer());
+        response.setHeader("Content-Type", contentType);
+        response.setHeader("Cache-Control", "public, max-age=3600");
+        return response.status(200).send(buffer);
+    } catch (error) {
+        console.error(error);
+        return response.status(500).json({ error: "Failed to fetch image" });
     }
 });
 
