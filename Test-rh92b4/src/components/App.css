@@ -1,7 +1,7 @@
 .panel { display: flex; flex-direction: column; gap: 12px; padding: 10px; }
 
 .search-row { display: flex; gap: 6px; }
-.search-input { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 2px; }
+.search-input { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; color: var(--text); background: var(--surface); border: none; border-radius: 2px; -webkit-appearance: none; appearance: none; box-shadow: none; }
 .search-input::placeholder { color: var(--text-dim); }
 .search-input:focus { outline: none; border-color: var(--accent); }
 

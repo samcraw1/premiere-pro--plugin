@@ -249,7 +249,7 @@ function App() {
           <img
             className="thumb"
             src={video.thumbnail}
-            alt={video.title}
+             alt={video.title}
           />
 
           <p>Duration: {formatDuration(video.duration)}</p>

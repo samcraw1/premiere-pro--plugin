@@ -19,6 +19,8 @@ export const App = () => {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState(null)
   const [importingId, setImportingId] = useState(null)
+  const [youtubeUrl, setYoutubeUrl] = useState('')
+  const [isFetchingUrlInfo, setIsFetchingUrlInfo] = useState(false)
 
   async function searchVideo() {
     if (query.trim() === "")
@@ -113,6 +115,44 @@ export const App = () => {
     }
   }
 
+  async function handlePasteYoutubeUrl() {
+    const pastedUrl = youtubeUrl.trim()
+
+    if (!pastedUrl) {
+      setError("Please paste a YouTube URL.")
+      return
+    }
+
+    setError(null)
+    setIsFetchingUrlInfo(true)
+
+    try {
+      const response = await fetch(
+        `${SERVER_URL}/url-info?url=${encodeURIComponent(pastedUrl)}`
+      )
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error ?? `Could not fetch video info: ${response.status}`)
+      }
+
+      const video = await response.json()
+
+      // UXP's webview can't load YouTube thumbnail images cross-origin
+      // directly, so route them through the server's /thumbnail proxy.
+      setPreviewVideo({
+        ...video,
+        thumbnail: video.thumbnail ? `${SERVER_URL}/thumbnail?url=${encodeURIComponent(video.thumbnail)}` : '',
+      })
+      setYoutubeUrl("")
+    } catch (err) {
+      console.error(err)
+      setError("Failed to fetch info for the pasted URL.")
+    } finally {
+      setIsFetchingUrlInfo(false)
+    }
+  }
+
   return (
   <main className="panel">
     <h1>Media Finder</h1>
@@ -132,7 +172,25 @@ export const App = () => {
     </button>
     </div>
 
+    <text> or </text>
+
+    <div className="search-row">
+      <input
+      className="search-input"
+      type="text"
+      value={youtubeUrl}
+      onChange={(event) => setYoutubeUrl(event.target.value)}
+
+      placeholder="paste a youtube url"
+    />
+
+    <button className="btn" onClick={handlePasteYoutubeUrl}>
+      Paste
+    </button>
+    </div>
+
     {isLoading && <p>Loading videos...</p>}
+    {isFetchingUrlInfo && <p>Fetching video info...</p>}
     {error && <p>{error}</p>}
 
     {previewVideo && (
