@@ -150,6 +150,38 @@ app.get("/thumbnail", async (request, response) => {
     }
 });
 
+app.get("/url-info", async (request, response) => {
+    const url = request.query.url;
+    if (!url || typeof url !== "string") {
+        return response.status(400).json({ error: "URL is required" });
+    }
+
+    try {
+        new URL(url);
+    } catch {
+        return response.status(400).json({ error: "Invalid URL" });
+    }
+
+    try {
+        // Not getVideoInfo() - it silently injects "-f best", which fails
+        // outright on videos with no single pre-merged best stream. Plain
+        // --dump-json needs no format resolution at all for metadata.
+        const stdout = await ytDlpWrap.execPromise([url, "--dump-json", "--no-warnings"]);
+        const entry = JSON.parse(stdout);
+        return response.status(200).json({
+            id: entry.id,
+            title: entry.title,
+            url: entry.webpage_url,
+            duration: entry.duration ?? 0,
+            thumbnail: entry.thumbnail ?? "",
+        });
+    } catch (error) {
+        console.error(error);
+        return response.status(500).json({ error: "Failed to fetch URL info" });
+    }
+});
+
+
 app.get("/search", async (request, response) => {
     const term = request.query.term
     if(!term) {

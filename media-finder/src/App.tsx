@@ -25,6 +25,9 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [importingId, setImportingId] = useState<string | null>(null)
   const [importProgress, setImportProgress] = useState<number | null>(null)
+  const [youtubeUrl, setYoutubeUrl] = useState('')
+  const [isFetchingUrlInfo, setIsFetchingUrlInfo] = useState(false)
+ 
 
   async function searchVideo() {
     if (query.trim() === "")
@@ -124,6 +127,38 @@ function App() {
     }
   }
 
+  async function handlePasteYoutubeUrl() {
+    const pastedUrl = youtubeUrl.trim()
+
+    if (!pastedUrl) {
+      setError("Please paste a YouTube URL.")
+      return
+    }
+
+    setError(null)
+    setIsFetchingUrlInfo(true)
+
+    try {
+      const response = await fetch(
+        `http://localhost:3000/url-info?url=${encodeURIComponent(pastedUrl)}`
+      )
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(errorData.error ?? `Could not fetch video info: ${response.status}`)
+      }
+
+      const video: Video = await response.json()
+      setPreviewVideo(video)
+      setYoutubeUrl("")
+    } catch (err) {
+      console.error(err)
+      setError("Failed to fetch info for the pasted URL.")
+    } finally {
+      setIsFetchingUrlInfo(false)
+    }
+  }
+
 
   
   return (
@@ -143,9 +178,28 @@ function App() {
     <button className="btn" onClick={searchVideo}>
       Search
     </button>
+   
+    </div>
+
+    <text> or </text>
+
+      <div className="search-row">
+      <input
+      className="search-input"
+      type="text"
+      value={youtubeUrl}
+      onChange={(event) => setYoutubeUrl(event.target.value)}
+
+      placeholder="paste a youtube url"
+    />
+
+    <button className="btn" onClick={handlePasteYoutubeUrl}>
+      Paste
+    </button>
     </div>
 
     {isLoading && <p>Loading videos...</p>}
+    {isFetchingUrlInfo && <p>Fetching video info...</p>}
     {error && <p>{error}</p>}
 
     {previewVideo && (
