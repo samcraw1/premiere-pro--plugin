@@ -6,10 +6,18 @@ const SERVER_URL = "http://localhost:3000";
 
 // UXP's webview can't load YouTube thumbnail images cross-origin directly,
 // so route them through the server's /thumbnail proxy.
+// URL lookups return .webp thumbnails, which UXP can't draw; swap to the jpg.
+function toJpgThumbnail(url) {
+  const match = url.match(/\/vi_webp\/([^/]+)\//)
+  return match ? `https://i.ytimg.com/vi/${match[1]}/hqdefault.jpg` : url
+}
+
 function proxyThumbnail(video) {
   return {
     ...video,
-    thumbnail: video.thumbnail ? `${SERVER_URL}/thumbnail?url=${encodeURIComponent(video.thumbnail)}` : '',
+    thumbnail: video.thumbnail
+      ? `${SERVER_URL}/thumbnail?url=${encodeURIComponent(toJpgThumbnail(video.thumbnail))}`
+      : '',
   }
 }
 
@@ -271,7 +279,8 @@ export const App = () => {
 
       const video = await response.json()
 
-      setPreviewVideo(proxyThumbnail(video))
+      const item = proxyThumbnail(video)
+      setVideos((current) => [item, ...current.filter((v) => v.id !== item.id)])
       setTab("results")
       setYoutubeUrl("")
     } catch (err) {
@@ -344,7 +353,7 @@ export const App = () => {
 
     {(isLoading || isFetchingUrlInfo) && (
       <div className="loading-box">
-        <img className="loading-gif" src="searching.gif" alt="" />
+        <img className="loading-gif" src={isLoading ? "searching.gif" : "fetching.gif"} alt="" />
         <p className="loading">{isLoading ? "Searching YouTube…" : "Fetching video info…"}</p>
       </div>
     )}
