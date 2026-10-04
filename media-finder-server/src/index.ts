@@ -1,5 +1,6 @@
 import "dotenv/config";
 import fs from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 import express from "express";
 import cors from "cors";
@@ -15,7 +16,7 @@ const YTDlpWrap = (YTDlpWrapAny.default ?? YTDlpWrapAny);
 
 ffmpeg.setFfmpegPath(ffmpegPath.path);
 
-const downloadsDir = path.join(process.cwd(), "downloads");
+const downloadsDir = process.env.DOWNLOADS_DIR ?? path.join(os.homedir(), "Desktop", "MediaFinder");
 const ytDlpBinaryPath = path.join(process.cwd(), "bin", "yt-dlp");
 
 try {
@@ -26,6 +27,8 @@ try {
   );
   process.exit(1);
 }
+
+await fs.mkdir(downloadsDir, { recursive: true });
 
 const ytDlpWrap = new YTDlpWrap(ytDlpBinaryPath);
 const app = express();

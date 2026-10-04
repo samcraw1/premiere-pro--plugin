@@ -4,6 +4,15 @@ import "./App.css";
 
 const SERVER_URL = "http://localhost:3000";
 
+// UXP's webview can't load YouTube thumbnail images cross-origin directly,
+// so route them through the server's /thumbnail proxy.
+function proxyThumbnail(video) {
+  return {
+    ...video,
+    thumbnail: video.thumbnail ? `${SERVER_URL}/thumbnail?url=${encodeURIComponent(video.thumbnail)}` : '',
+  }
+}
+
 const RECENT_KEY = "mediaFinder.recentVideos"
 const RECENT_LIMIT = 50
 
@@ -60,6 +69,37 @@ function formatDuration(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
+function VideoRow({ video, importing, onPreview, onImport }) {
+  const detail = video.binName
+    ? `${formatDuration(video.duration)} · ${video.binName}`
+    : formatDuration(video.duration)
+  return (
+    <li className="row">
+      <div className="row-thumb-wrap" onClick={onPreview}>
+        {video.thumbnail && (
+          <img
+            className="row-thumb"
+            src={video.thumbnail}
+            alt=""
+            onError={(event) => { event.target.style.display = "none" }}
+          />
+        )}
+      </div>
+      <div className="row-main" onClick={onPreview}>
+        <span className="row-title">{video.title}</span>
+        <span className="row-meta">{detail}</span>
+      </div>
+      {onImport ? (
+        <button className="btn btn--primary btn--sm" onClick={onImport} disabled={importing}>
+          {importing ? "Importing…" : "Import"}
+        </button>
+      ) : (
+        <span className="row-done" title="Imported">✓</span>
+      )}
+    </li>
+  )
+}
+
 export const App = () => {
 
   const [query, setQuery] = useState('')
@@ -72,6 +112,7 @@ export const App = () => {
   const [importingId, setImportingId] = useState(null)
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [isFetchingUrlInfo, setIsFetchingUrlInfo] = useState(false)
+  const [tab, setTab] = useState("results")
   const [bins, setBins] = useState([])
   const [selectedBinId, setSelectedBinId] = useState("")
 
@@ -109,6 +150,8 @@ export const App = () => {
 
     setIsLoading(true)
     setError(null)
+    setTab("results")
+    setVideos([])
     let code = 500
 
     try {
@@ -123,14 +166,8 @@ export const App = () => {
 
       const data = await response.json()
 
-      // UXP's webview can't load YouTube thumbnail images cross-origin
-      // directly, so route them through the server's /thumbnail proxy.
-      const results = data.results.map((video) => ({
-        ...video,
-        thumbnail: video.thumbnail ? `${SERVER_URL}/thumbnail?url=${encodeURIComponent(video.thumbnail)}` : '',
-      }))
-
-      setVideos(results)
+      setVideos(data.results.map(proxyThumbnail))
+      setTab("results")
     } catch (err) {
       console.error(err)
       setError({ code, message: "Something went wrong fetching videos." })
@@ -186,8 +223,9 @@ export const App = () => {
       }
 
       console.log("Downloaded to", result.filePath)
+      const binName = bins.find((b) => b.id === selectedBinId)?.name ?? "Project root"
       setDownloadedVideos((currentVideos) =>
-        [{ ...video, url: result.filePath }, ...currentVideos].slice(0, RECENT_LIMIT)
+        [{ ...video, url: result.filePath, binName }, ...currentVideos].slice(0, RECENT_LIMIT)
       )
       message = "Downloaded, but importing into Premiere failed."
       const premierepro = require("premierepro")
@@ -216,6 +254,7 @@ export const App = () => {
     }
 
     setError(null)
+    setTab("results")
     setIsFetchingUrlInfo(true)
     let code = 500
 
@@ -232,12 +271,8 @@ export const App = () => {
 
       const video = await response.json()
 
-      // Same as searchVideo - UXP's webview can't load YouTube thumbnails
-      // cross-origin directly, so route it through the /thumbnail proxy.
-      setPreviewVideo({
-        ...video,
-        thumbnail: video.thumbnail ? `${SERVER_URL}/thumbnail?url=${encodeURIComponent(video.thumbnail)}` : '',
-      })
+      setPreviewVideo(proxyThumbnail(video))
+      setTab("results")
       setYoutubeUrl("")
     } catch (err) {
       console.error(err)
@@ -247,120 +282,131 @@ export const App = () => {
     }
   }
 
+  const alreadyImported = (video) => downloadedVideos.some((v) => v.id === video.id)
+
   return (
   <main className="panel">
-    <h1>Media Finder</h1>
+    <header className="header">
+      <h1>Media Finder</h1>
 
-    <div className="search-row">
-      <input
-      className="search-input"
-      type="text"
-      value={query}
-      onChange={(event) => setQuery(event.target.value)}
+      <div className="search-row">
+        <input
+          className="search-input"
+          type="text"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search for a video"
+        />
+        <button className="btn btn--primary" onClick={searchVideo} disabled={isLoading}>
+          {isLoading ? "Searching…" : "Search"}
+        </button>
+      </div>
 
-      placeholder="search for a video"
-    />
+      <div className="search-row">
+        <input
+          className="search-input"
+          type="text"
+          value={youtubeUrl}
+          onChange={(event) => setYoutubeUrl(event.target.value)}
+          placeholder="…or paste a YouTube URL"
+        />
+        <button className="btn" onClick={handlePasteYoutubeUrl} disabled={isFetchingUrlInfo}>
+          {isFetchingUrlInfo ? "Fetching…" : "Paste"}
+        </button>
+      </div>
 
-    <button className="btn" onClick={searchVideo}>
-      Search
-    </button>
-    </div>
+      <div className="bin-row">
+        <label className="label" htmlFor="bin-select">Import into</label>
+        <div className="search-row">
+          <select
+            id="bin-select"
+            className="select"
+            value={selectedBinId}
+            onChange={(event) => setSelectedBinId(event.target.value)}
+          >
+            <option value="">Project root</option>
+            {bins.map((bin) => (
+              <option key={bin.id} value={bin.id}>{bin.name}</option>
+            ))}
+          </select>
+          <button className="btn" onClick={loadBins}>Refresh</button>
+        </div>
+      </div>
+      <div className="tabs">
+        <button className={`tab${tab === "results" ? " tab--active" : ""}`} onClick={() => setTab("results")}>
+          Results ({videos.length})
+        </button>
+        <button className={`tab${tab === "recent" ? " tab--active" : ""}`} onClick={() => setTab("recent")}>
+          Recent ({downloadedVideos.length})
+        </button>
+      </div>
+    </header>
 
-    <p>or</p>
-
-    <div className="search-row">
-      <input
-      className="search-input"
-      type="text"
-      value={youtubeUrl}
-      onChange={(event) => setYoutubeUrl(event.target.value)}
-
-      placeholder="paste a youtube url"
-    />
-
-    <button className="btn" onClick={handlePasteYoutubeUrl}>
-      Paste
-    </button>
-    </div>
-
-    <div className="search-row">
-      <label htmlFor="bin-select">Import into:</label>
-      <select
-        id="bin-select"
-        value={selectedBinId}
-        onChange={(event) => setSelectedBinId(event.target.value)}
-      >
-        <option value="">Project root</option>
-        {bins.map((bin) => (
-          <option key={bin.id} value={bin.id}>{bin.name}</option>
-        ))}
-      </select>
-      <button className="btn" onClick={loadBins}>Refresh</button>
-    </div>
-
-    {isLoading && <p>Loading videos...</p>}
-    {isFetchingUrlInfo && <p>Fetching video info...</p>}
-    {error && <p>Error {error.code}: {error.message}</p>}
+    {(isLoading || isFetchingUrlInfo) && (
+      <div className="loading-box">
+        <img className="loading-gif" src="searching.gif" alt="" />
+        <p className="loading">{isLoading ? "Searching YouTube…" : "Fetching video info…"}</p>
+      </div>
+    )}
+    {error && (
+      <p className="banner"><strong>Error {error.code}</strong> {error.message}</p>
+    )}
 
     {previewVideo && (
       <section className="preview">
-        <h2>Preview</h2>
-        <h3>{previewVideo.title}</h3>
-        <img
-          className="thumb"
-          src={previewVideo.thumbnail}
-          alt={previewVideo.title}
-        />
-        <p>Duration: {formatDuration(previewVideo.duration)}</p>
+        {previewVideo.thumbnail && (
+          <img className="preview-thumb" src={previewVideo.thumbnail} alt={previewVideo.title} />
+        )}
+        <h3 className="preview-title">{previewVideo.title}</h3>
+        <p className="row-meta">{formatDuration(previewVideo.duration)}</p>
         <div className="preview-actions">
-          <button className="btn btn--primary" onClick={() => handleImport(previewVideo)} disabled={importingId === previewVideo.id}>
-            {importingId === previewVideo.id ? "Importing..." : "Import"}
+          <button
+            className="btn btn--primary"
+            onClick={() => handleImport(previewVideo)}
+            disabled={importingId === previewVideo.id || alreadyImported(previewVideo)}
+          >
+            {importingId === previewVideo.id ? "Importing…" : alreadyImported(previewVideo) ? "Imported" : "Import"}
           </button>
-          <button className="btn" onClick={() => setPreviewVideo(null)}>Close Preview</button>
+          <button className="btn" onClick={() => setPreviewVideo(null)}>Close</button>
         </div>
       </section>
     )}
 
-    <h2>Recently Added Videos</h2>
-    {downloadedVideos.length > 0 && (
-      <button className="btn" onClick={() => setDownloadedVideos([])}>Clear</button>
+    {tab === "results" && (
+      videos.length > 0 ? (
+        <ul className="list">
+          {videos.map((video) => (
+            <VideoRow
+              key={video.id}
+              video={alreadyImported(video) ? downloadedVideos.find((v) => v.id === video.id) : video}
+              importing={importingId === video.id}
+              onPreview={() => setPreviewVideo(video)}
+              onImport={alreadyImported(video) ? null : () => handleImport(video)}
+            />
+          ))}
+        </ul>
+      ) : (
+        !isLoading && !isFetchingUrlInfo && <p className="status">No results yet. Search or paste a URL.</p>
+      )
     )}
-    <section className="grid">
-      {downloadedVideos.map((video) => (
-        <article className="card" key={video.id}>
-          <h3> {video.title}</h3>
-          <img
-            className="thumb"
-            src={video.thumbnail}
-            alt={video.title}
-          />
-          <p>Duration: {formatDuration(video.duration)}</p>
-        </article>
-      ))}
 
-    </section>
-
-    <section className="grid">
-      {videos.map((video) => (
-        <article className="card" key={video.id}>
-          <h3>{video.title}</h3>
-
-          <img
-            className="thumb"
-            src={video.thumbnail}
-            alt={video.title}
-          />
-
-          <p>Duration: {formatDuration(video.duration)}</p>
-          <div className="card-actions">
-            <button className="btn" onClick={() => setPreviewVideo(video)}>Preview</button>
-            <button className="btn btn--primary" onClick={() => handleImport(video)} disabled={importingId === video.id}>
-              {importingId === video.id ? "Importing..." : "Import"}
-            </button>
+    {tab === "recent" && (
+      downloadedVideos.length > 0 ? (
+        <section>
+          <div className="section-head">
+            <span className="label">Newest first</span>
+            <button className="btn btn--ghost btn--sm" onClick={() => setDownloadedVideos([])}>Clear</button>
           </div>
-        </article>
-      ))}
-    </section>
+          <ul className="list">
+            {downloadedVideos.map((video) => (
+              <VideoRow key={video.id} video={video} onPreview={() => setPreviewVideo(video)} />
+            ))}
+          </ul>
+        </section>
+      ) : (
+        <p className="status">Nothing imported yet.</p>
+      )
+    )}
   </main>
 );
 }
