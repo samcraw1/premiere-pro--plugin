@@ -9,6 +9,16 @@ type Video = {
   thumbnail: string
 }
 
+export type ErrorCodeForDebugging = {
+  code: 400 | 401 | 403 | 404 | 409 | 500
+  message: string
+}
+
+function toErrorCode(status: number): ErrorCodeForDebugging["code"] {
+  const known: number[] = [400, 401, 403, 404, 409]
+  return known.includes(status) ? (status as ErrorCodeForDebugging["code"]) : 500
+}
+
 function formatDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60)
   const secs = seconds % 60
@@ -22,7 +32,7 @@ function App() {
   const [downloadedVideos, setDownloadedVideos] = useState<Video[]>([])
   const [previewVideo, setPreviewVideo] = useState<Video | null>(null)
   const [isLoading, setIsLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<ErrorCodeForDebugging | null>(null)
   const [importingId, setImportingId] = useState<string | null>(null)
   const [importProgress, setImportProgress] = useState<number | null>(null)
   const [youtubeUrl, setYoutubeUrl] = useState('')
@@ -35,6 +45,7 @@ function App() {
 
     setIsLoading(true)
     setError(null)
+    let code: ErrorCodeForDebugging["code"] = 500
 
     try {
       const response = await fetch(
@@ -42,6 +53,7 @@ function App() {
       )
 
       if (!response.ok) {
+        code = toErrorCode(response.status)
         throw new Error(`Search request failed: ${response.status}`)
       }
 
@@ -50,7 +62,7 @@ function App() {
       setVideos(data.results as Video[])
     } catch (err) {
       console.error(err)
-      setError("Something went wrong fetching videos.")
+      setError({ code, message: "Something went wrong fetching videos." })
       setVideos([])
     } finally {
       setIsLoading(false)
@@ -66,6 +78,7 @@ function App() {
     setImportingId(video.id)
     setImportProgress(0)
     setError(null)
+    let code: ErrorCodeForDebugging["code"] = 500
 
     try {
       const response = await fetch("http://localhost:3000/download", {
@@ -75,6 +88,7 @@ function App() {
       })
 
       if (!response.ok) {
+        code = toErrorCode(response.status)
         const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.error ?? `Download failed: ${response.status}`)
       }
@@ -120,7 +134,7 @@ function App() {
       setDownloadedVideos((currentVideos) => [...currentVideos, { ...video, url: result!.filePath }])
     } catch (err) {
       console.error(err)
-      setError("Failed to download video.")
+      setError({ code, message: "Failed to download video." })
     } finally {
       setImportingId(null)
       setImportProgress(null)
@@ -131,12 +145,13 @@ function App() {
     const pastedUrl = youtubeUrl.trim()
 
     if (!pastedUrl) {
-      setError("Please paste a YouTube URL.")
+      setError({ code: 400, message: "Please paste a YouTube URL." })
       return
     }
 
     setError(null)
     setIsFetchingUrlInfo(true)
+    let code: ErrorCodeForDebugging["code"] = 500
 
     try {
       const response = await fetch(
@@ -144,6 +159,7 @@ function App() {
       )
 
       if (!response.ok) {
+        code = toErrorCode(response.status)
         const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.error ?? `Could not fetch video info: ${response.status}`)
       }
@@ -153,7 +169,7 @@ function App() {
       setYoutubeUrl("")
     } catch (err) {
       console.error(err)
-      setError("Failed to fetch info for the pasted URL.")
+      setError({ code, message: "Failed to fetch info for the pasted URL." })
     } finally {
       setIsFetchingUrlInfo(false)
     }
@@ -200,7 +216,7 @@ function App() {
 
     {isLoading && <p>Loading videos...</p>}
     {isFetchingUrlInfo && <p>Fetching video info...</p>}
-    {error && <p>{error}</p>}
+    {error && <p>Error {error.code}: {error.message}</p>}
 
     {previewVideo && (
       <section className="preview">

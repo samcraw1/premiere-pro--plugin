@@ -1,8 +1,58 @@
 import React from "react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import "./App.css";
 
 const SERVER_URL = "http://localhost:3000";
+
+const RECENT_KEY = "mediaFinder.recentVideos"
+const RECENT_LIMIT = 50
+
+function loadRecent() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(RECENT_KEY))
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function saveRecent(list) {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(list))
+  } catch (err) {
+    console.error("Could not save recent videos", err)
+  }
+}
+
+/**
+ * @typedef {{ code: 400 | 401 | 403 | 404 | 409 | 500, message: string }} ErrorCodeForDebugging
+ */
+
+/** @returns {ErrorCodeForDebugging["code"]} */
+function toErrorCode(status) {
+  return [400, 401, 403, 404, 409].includes(status) ? status : 500
+}
+
+// Walks the bin tree under `folder`, returning a flat list labelled by path
+// ("Footage / B-roll"). getItems() hands back plain ProjectItems, so each one
+// has to be cast to a FolderItem to tell whether it's a bin and to recurse.
+async function collectBins(premierepro, folder, prefix = "") {
+  const found = []
+  const items = await folder.getItems()
+  for (const item of items) {
+    let bin = null
+    try {
+      bin = premierepro.FolderItem.cast(item)
+    } catch {
+      bin = null
+    }
+    if (!bin) continue
+    const name = prefix ? `${prefix} / ${item.name}` : item.name
+    found.push({ id: item.guid?.toString() ?? name, name, item: bin })
+    found.push(...(await collectBins(premierepro, bin, name)))
+  }
+  return found
+}
 
 function formatDuration(seconds) {
   const mins = Math.floor(seconds / 60)
@@ -14,13 +64,44 @@ export const App = () => {
 
   const [query, setQuery] = useState('')
   const [videos, setVideos] = useState([])
-  const [downloadedVideos, setDownloadedVideos] = useState([])
+  const [downloadedVideos, setDownloadedVideos] = useState(loadRecent)
   const [previewVideo, setPreviewVideo] = useState(null)
   const [isLoading, setIsLoading] = useState(false)
+  /** @type {[ErrorCodeForDebugging | null, Function]} */
   const [error, setError] = useState(null)
   const [importingId, setImportingId] = useState(null)
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [isFetchingUrlInfo, setIsFetchingUrlInfo] = useState(false)
+  const [bins, setBins] = useState([])
+  const [selectedBinId, setSelectedBinId] = useState("")
+
+  async function loadBins() {
+    try {
+      const premierepro = require("premierepro")
+      const project = await premierepro.Project.getActiveProject()
+      if (!project) {
+        setBins([])
+        setError({ code: 404, message: "No active Premiere project - open a project first." })
+        return
+      }
+      const root = await project.getRootItem()
+      const found = await collectBins(premierepro, root)
+      setBins(found)
+      setSelectedBinId((current) => (found.some((b) => b.id === current) ? current : ""))
+    } catch (err) {
+      console.error(err)
+      setBins([])
+      setError({ code: 500, message: "Could not load project bins." })
+    }
+  }
+
+  useEffect(() => {
+    loadBins()
+  }, [])
+
+  useEffect(() => {
+    saveRecent(downloadedVideos)
+  }, [downloadedVideos])
 
   async function searchVideo() {
     if (query.trim() === "")
@@ -28,6 +109,7 @@ export const App = () => {
 
     setIsLoading(true)
     setError(null)
+    let code = 500
 
     try {
       const response = await fetch(
@@ -35,6 +117,7 @@ export const App = () => {
       )
 
       if (!response.ok) {
+        code = toErrorCode(response.status)
         throw new Error(`Search request failed: ${response.status}`)
       }
 
@@ -50,7 +133,7 @@ export const App = () => {
       setVideos(results)
     } catch (err) {
       console.error(err)
-      setError("Something went wrong fetching videos.")
+      setError({ code, message: "Something went wrong fetching videos." })
       setVideos([])
     } finally {
       setIsLoading(false)
@@ -65,15 +148,18 @@ export const App = () => {
 
     setImportingId(video.id)
     setError(null)
+    let code = 500
+    let message = "Failed to download video."
 
     try {
       const response = await fetch(`${SERVER_URL}/download`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: video.url }),
+        body: JSON.stringify({ url: video.url, title: video.title }),
       })
 
       if (!response.ok) {
+        code = toErrorCode(response.status)
         const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.error ?? `Download failed: ${response.status}`)
       }
@@ -100,16 +186,22 @@ export const App = () => {
       }
 
       console.log("Downloaded to", result.filePath)
-      setDownloadedVideos((currentVideos) => [...currentVideos, { ...video, url: result.filePath }])
+      setDownloadedVideos((currentVideos) =>
+        [{ ...video, url: result.filePath }, ...currentVideos].slice(0, RECENT_LIMIT)
+      )
+      message = "Downloaded, but importing into Premiere failed."
       const premierepro = require("premierepro")
       const project = await premierepro.Project.getActiveProject()
       if(!project){
+        code = 404
         throw new Error("no active premiere pro project - open a project first")
       }
-      await project.importFiles([result.filePath], true, null, false)
+      // null target bin = project root
+      const targetBin = bins.find((b) => b.id === selectedBinId)?.item ?? null
+      await project.importFiles([result.filePath], true, targetBin, false)
     } catch (err) {
       console.error(err)
-      setError("Failed to download video.")
+      setError({ code, message })
     } finally {
       setImportingId(null)
     }
@@ -119,12 +211,13 @@ export const App = () => {
     const pastedUrl = youtubeUrl.trim()
 
     if (!pastedUrl) {
-      setError("Please paste a YouTube URL.")
+      setError({ code: 400, message: "Please paste a YouTube URL." })
       return
     }
 
     setError(null)
     setIsFetchingUrlInfo(true)
+    let code = 500
 
     try {
       const response = await fetch(
@@ -132,14 +225,15 @@ export const App = () => {
       )
 
       if (!response.ok) {
+        code = toErrorCode(response.status)
         const errorData = await response.json().catch(() => ({}))
         throw new Error(errorData.error ?? `Could not fetch video info: ${response.status}`)
       }
 
       const video = await response.json()
 
-      // UXP's webview can't load YouTube thumbnail images cross-origin
-      // directly, so route them through the server's /thumbnail proxy.
+      // Same as searchVideo - UXP's webview can't load YouTube thumbnails
+      // cross-origin directly, so route it through the /thumbnail proxy.
       setPreviewVideo({
         ...video,
         thumbnail: video.thumbnail ? `${SERVER_URL}/thumbnail?url=${encodeURIComponent(video.thumbnail)}` : '',
@@ -147,7 +241,7 @@ export const App = () => {
       setYoutubeUrl("")
     } catch (err) {
       console.error(err)
-      setError("Failed to fetch info for the pasted URL.")
+      setError({ code, message: "Failed to fetch info for the pasted URL." })
     } finally {
       setIsFetchingUrlInfo(false)
     }
@@ -164,7 +258,7 @@ export const App = () => {
       value={query}
       onChange={(event) => setQuery(event.target.value)}
 
-      placeholder="Search for a video"
+      placeholder="search for a video"
     />
 
     <button className="btn" onClick={searchVideo}>
@@ -172,7 +266,7 @@ export const App = () => {
     </button>
     </div>
 
-    <text> or </text>
+    <p>or</p>
 
     <div className="search-row">
       <input
@@ -189,9 +283,24 @@ export const App = () => {
     </button>
     </div>
 
+    <div className="search-row">
+      <label htmlFor="bin-select">Import into:</label>
+      <select
+        id="bin-select"
+        value={selectedBinId}
+        onChange={(event) => setSelectedBinId(event.target.value)}
+      >
+        <option value="">Project root</option>
+        {bins.map((bin) => (
+          <option key={bin.id} value={bin.id}>{bin.name}</option>
+        ))}
+      </select>
+      <button className="btn" onClick={loadBins}>Refresh</button>
+    </div>
+
     {isLoading && <p>Loading videos...</p>}
     {isFetchingUrlInfo && <p>Fetching video info...</p>}
-    {error && <p>{error}</p>}
+    {error && <p>Error {error.code}: {error.message}</p>}
 
     {previewVideo && (
       <section className="preview">
@@ -213,6 +322,9 @@ export const App = () => {
     )}
 
     <h2>Recently Added Videos</h2>
+    {downloadedVideos.length > 0 && (
+      <button className="btn" onClick={() => setDownloadedVideos([])}>Clear</button>
+    )}
     <section className="grid">
       {downloadedVideos.map((video) => (
         <article className="card" key={video.id}>

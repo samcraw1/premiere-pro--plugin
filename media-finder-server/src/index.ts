@@ -42,6 +42,15 @@ function convertToMp4(inputPath: string, outputPath: string): Promise<void> {
   });
 }
 
+function toSafeBaseName(title: unknown, fallback: string): string {
+  const cleaned = String(title ?? "")
+    .replace(/[\\/:*?"<>|%\u0000-\u001f]/g, "") // % would break yt-dlp's -o template
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^\.+/, "")
+    .slice(0, 100)
+  return cleaned || fallback
+}
 
 app.use(cors());
 app.use(express.json());
@@ -67,13 +76,15 @@ app.post("/download", async (request, response) => {
     // yt-dlp picks the real extension itself (usually mp4, but not
     // guaranteed - e.g. it falls back to webm if no mp4 format exists),
     // so we template it and check afterward rather than assuming.
-    const rawPathTemplate = path.join(downloadsDir, `${downloadId}-raw.%(ext)s`);
+    const baseName = `${toSafeBaseName(video.title, "video")} [${downloadId}]`;
+    const rawPathTemplate = path.join(downloadsDir, `${baseName}-raw.%(ext)s`);
 
     try {
         await new Promise<void>((resolve, reject) => {
             ytDlpWrap
                 .exec([
                     video.url,
+                    "--cookies-from-browser", "chrome",
                     // Pin the codec, not just the container - YouTube also
                     // serves AV1/VP9 inside mp4 containers, which Premiere
                     // doesn't reliably decode, so ext=mp4 alone isn't enough.
@@ -90,7 +101,7 @@ app.post("/download", async (request, response) => {
         });
 
         const downloadedFiles = await fs.readdir(downloadsDir);
-        const rawFilename = downloadedFiles.find((name) => name.startsWith(`${downloadId}-raw.`));
+        const rawFilename = downloadedFiles.find((name) => name.startsWith(`${baseName}-raw.`));
         if (!rawFilename) {
             throw new Error("yt-dlp did not produce an output file");
         }
@@ -102,11 +113,11 @@ app.post("/download", async (request, response) => {
 
         if (!isAlreadyMp4) {
             response.write(JSON.stringify({ type: "converting" }) + "\n");
-            const convertedPath = path.join(downloadsDir, `${downloadId}.mp4`);
+            const convertedPath = path.join(downloadsDir, `${baseName}.mp4`);
             await convertToMp4(rawPath, convertedPath);
             await fs.unlink(rawPath);
             finalPath = convertedPath;
-            filename = `${downloadId}.mp4`;
+            filename = `${baseName}.mp4`;
         }
 
         response.write(JSON.stringify({ type: "done", filename, filePath: finalPath }) + "\n");
@@ -166,7 +177,7 @@ app.get("/url-info", async (request, response) => {
         // Not getVideoInfo() - it silently injects "-f best", which fails
         // outright on videos with no single pre-merged best stream. Plain
         // --dump-json needs no format resolution at all for metadata.
-        const stdout = await ytDlpWrap.execPromise([url, "--dump-json", "--no-warnings"]);
+        const stdout = await ytDlpWrap.execPromise([url, "--dump-json", "--no-warnings", "--cookies-from-browser", "chrome"]);
         const entry = JSON.parse(stdout);
         return response.status(200).json({
             id: entry.id,
@@ -193,6 +204,7 @@ app.get("/search", async (request, response) => {
             `ytsearch12:${String(term)}`,
             "--dump-json",
             "--no-warnings",
+            "--cookies-from-browser", "chrome",
         ]);
 
         const results = stdout
