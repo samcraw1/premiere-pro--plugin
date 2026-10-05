@@ -1,5 +1,5 @@
 import React from "react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import "./App.css";
 
 const SERVER_URL = "http://localhost:3000";
@@ -146,6 +146,8 @@ export const App = () => {
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [isFetchingUrlInfo, setIsFetchingUrlInfo] = useState(false)
   const [tab, setTab] = useState("results")
+  const testVideoRef = useRef(null)
+  const [testStatus, setTestStatus] = useState("waiting")
   const [bins, setBins] = useState([])
   const [selectedBinId, setSelectedBinId] = useState("")
 
@@ -380,6 +382,33 @@ export const App = () => {
         </button>
       </div>
     </header>
+    <div className="video-test">
+      <video
+        ref={testVideoRef}
+        width="320"
+        height="180"
+        muted
+        style={{ background: "#400", border: "2px solid red" }}
+        src="http://localhost:3000/previews/test.mp4"
+        onLoadedData={() => setTestStatus("loadeddata")}
+        onCanPlay={() => setTestStatus("canplay")}
+        onPlay={() => setTestStatus("playing")}
+        onEnded={() => setTestStatus("ended")}
+        onError={() => setTestStatus("ERROR")}
+      ></video>
+      <div className="search-row">
+        <button className="btn" onClick={async () => {
+          try {
+            await testVideoRef.current.play()
+            setTestStatus("play() ok")
+          } catch (err) {
+            setTestStatus("play() failed: " + String(err))
+          }
+        }}>Play</button>
+        <button className="btn" onClick={() => testVideoRef.current.pause()}>Pause</button>
+      </div>
+      <p className="status">video status: {testStatus}</p>
+    </div>
 
     {(isLoading || isFetchingUrlInfo) && (
       <div className="loading-box">
