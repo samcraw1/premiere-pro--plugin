@@ -6,6 +6,27 @@ const SERVER_URL = "http://localhost:3000";
 
 // UXP's webview can't load YouTube thumbnail images cross-origin directly,
 // so route them through the server's /thumbnail proxy.
+const X_HOSTS = ["x.com", "twitter.com", "mobile.twitter.com", "t.co"]
+
+// "x" for X/Twitter links, otherwise "youtube". Entries saved before sources
+// existed have no `source`, so callers treat a missing value as "youtube".
+function detectSource(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, "")
+    return X_HOSTS.includes(host) ? "x" : "youtube"
+  } catch {
+    return "youtube"
+  }
+}
+
+// "@handle – first words of the tweet" instead of the whole tweet text.
+function xTitle(video) {
+  const text = (video.description || video.title || "").replace(/\s+/g, " ").trim()
+  const snippet = text.length > 60 ? `${text.slice(0, 60).trim()}…` : text
+  const handle = video.uploaderId ? `@${video.uploaderId}` : (video.uploader || "X")
+  return snippet ? `${handle} – ${snippet}` : handle
+}
+
 // URL lookups return .webp thumbnails, which UXP can't draw; swap to the jpg.
 function toJpgThumbnail(url) {
   const match = url.match(/\/vi_webp\/([^/]+)\//)
@@ -78,11 +99,12 @@ function formatDuration(seconds) {
 }
 
 function VideoRow({ video, importing, onPreview, onImport }) {
+  const isX = video.source === "x"
   const detail = video.binName
     ? `${formatDuration(video.duration)} · ${video.binName}`
     : formatDuration(video.duration)
   return (
-    <li className="row">
+    <li className={`row${isX ? " row--x" : ""}`}>
       <div className="row-thumb-wrap" onClick={onPreview}>
         {video.thumbnail && (
           <img
@@ -95,7 +117,10 @@ function VideoRow({ video, importing, onPreview, onImport }) {
       </div>
       <div className="row-main" onClick={onPreview}>
         <span className="row-title">{video.title}</span>
-        <span className="row-meta">{detail}</span>
+        <span className="row-meta">
+          <span className={`badge${isX ? " badge--x" : ""}`}>{isX ? "X" : "YT"}</span>
+          {detail}
+        </span>
       </div>
       {onImport ? (
         <button className="btn btn--primary btn--sm" onClick={onImport} disabled={importing}>
@@ -174,7 +199,7 @@ export const App = () => {
 
       const data = await response.json()
 
-      setVideos(data.results.map(proxyThumbnail))
+      setVideos(data.results.map((v) => ({ ...proxyThumbnail(v), source: "youtube" })))
       setTab("results")
     } catch (err) {
       console.error(err)
@@ -279,7 +304,12 @@ export const App = () => {
 
       const video = await response.json()
 
-      const item = proxyThumbnail(video)
+      const source = detectSource(pastedUrl)
+      const item = {
+        ...proxyThumbnail(video),
+        source,
+        ...(source === "x" ? { title: xTitle(video) } : {}),
+      }
       setVideos((current) => [item, ...current.filter((v) => v.id !== item.id)])
       setTab("results")
       setYoutubeUrl("")
@@ -317,7 +347,7 @@ export const App = () => {
           type="text"
           value={youtubeUrl}
           onChange={(event) => setYoutubeUrl(event.target.value)}
-          placeholder="…or paste a YouTube URL"
+          placeholder="…or paste a YouTube or X URL"
         />
         <button className="btn" onClick={handlePasteYoutubeUrl} disabled={isFetchingUrlInfo}>
           {isFetchingUrlInfo ? "Fetching…" : "Paste"}

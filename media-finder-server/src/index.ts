@@ -144,7 +144,9 @@ app.get("/thumbnail", async (request, response) => {
     } catch {
         return response.status(400).json({ error: "Invalid URL" });
     }
-    if (!parsed.hostname.endsWith("ytimg.com")) {
+    const allowedImageHosts = ["ytimg.com", "twimg.com"];
+    const host = parsed.hostname;
+    if (!allowedImageHosts.some((d) => host === d || host.endsWith(`.${d}`))) {
         return response.status(400).json({ error: "Unsupported image host" });
     }
 
@@ -180,7 +182,7 @@ app.get("/url-info", async (request, response) => {
         // Not getVideoInfo() - it silently injects "-f best", which fails
         // outright on videos with no single pre-merged best stream. Plain
         // --dump-json needs no format resolution at all for metadata.
-        const stdout = await ytDlpWrap.execPromise([url, "--dump-json", "--no-warnings", "--cookies-from-browser", "chrome"]);
+        const stdout = await ytDlpWrap.execPromise([url, "--dump-json", "--no-warnings", "--cookies-from-browser", "chrome", "--playlist-items", "1"]);
         const entry = JSON.parse(stdout);
         return response.status(200).json({
             id: entry.id,
@@ -188,6 +190,9 @@ app.get("/url-info", async (request, response) => {
             url: entry.webpage_url,
             duration: entry.duration ?? 0,
             thumbnail: entry.thumbnail ?? "",
+            uploader: entry.uploader ?? "",
+            uploaderId: entry.uploader_id ?? "",
+            description: entry.description ?? "",
         });
     } catch (error) {
         console.error(error);
