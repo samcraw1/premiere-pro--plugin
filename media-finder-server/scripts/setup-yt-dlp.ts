@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import fileSystem from "node:fs/promises";
 import path from "node:path";
 import YTDlpWrapImport from "yt-dlp-wrap";
 
@@ -11,7 +11,7 @@ const YTDlpWrap = (YTDlpWrapAny.default ?? YTDlpWrapAny);
 const binaryPath = path.join(process.cwd(), "bin", "yt-dlp");
 
 async function main() {
-  await fs.mkdir(path.dirname(binaryPath), { recursive: true });
+  await fileSystem.mkdir(path.dirname(binaryPath), { recursive: true });
   console.log(`Downloading yt-dlp binary to ${binaryPath}...`);
   await YTDlpWrap.downloadFromGithub(binaryPath);
   console.log("Done. You can now run `npm run dev`.");

@@ -1,5 +1,5 @@
 import "dotenv/config";
-import fs from "node:fs/promises"
+import fileSystem from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import express from "express";
@@ -20,7 +20,7 @@ const downloadsDir = process.env.DOWNLOADS_DIR ?? path.join(os.homedir(), "Deskt
 const ytDlpBinaryPath = path.join(process.cwd(), "bin", "yt-dlp");
 
 try {
-  await fs.access(ytDlpBinaryPath);
+  await fileSystem.access(ytDlpBinaryPath);
 } catch {
   console.error(
     `yt-dlp binary not found at ${ytDlpBinaryPath}. Run "npm run setup:yt-dlp" once, then try again.`
@@ -28,7 +28,8 @@ try {
   process.exit(1);
 }
 
-await fs.mkdir(downloadsDir, { recursive: true });
+await fileSystem.mkdir(downloadsDir, { recursive: true });
+await fileSystem.mkdir(path.join(process.cwd(), "previews"), { recursive: true });
 
 const ytDlpWrap = new YTDlpWrap(ytDlpBinaryPath);
 const app = express();
@@ -62,6 +63,50 @@ app.use("/previews", express.static(path.join(process.cwd(), "previews")));
 app.listen(3000, () => {
   console.log("Server is running on port 3000");
 });
+
+app.post("/preview", async (request, response) => {
+    const { url, id } = request.body;
+    if(!url || !id) {
+        return response.status(400).json({ error: "URL and ID are required" });
+    }
+    let parsed: URL;
+    try{
+        parsed = new URL(url); 
+    } catch {
+        return response.status(400).json({ error: "Invalid URL" });
+    }
+    if(!["http:", "https:"].includes(parsed.protocol)) {
+        return response.status(400).json({ error: "Invalid URL protocol" });
+    }
+
+    const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, "");
+
+    const clipPath = path.join(process.cwd(), "previews", `${safeId}.mp4`);
+    try{
+        await fileSystem.access(clipPath);
+        return response.status(200).json({ previewUrl: `http://localhost:3000/previews/${safeId}.mp4` });
+    } catch {
+        // no cached clip yet; fall through to make one
+    }
+
+    try {
+        await ytDlpWrap.execPromise([
+           "-f", "b[height<=360][vcodec^=avc1]/18",
+        "--download-sections", "*0-10",
+        "--force-keyframes-at-cuts",
+        "--cookies-from-browser", "chrome",
+        "--ffmpeg-location", ffmpegPath.path,
+        "-o", clipPath,
+        "--", url,
+        ])
+        return response.status(200).json({ previewUrl: `http://localhost:3000/previews/${safeId}.mp4` });
+    } catch (err) {
+        console.error(err);
+        return response.status(500).json({ error: "Failed to generate preview" });
+    }
+});
+
+    
 
 
 app.post("/download", async (request, response) => {
@@ -104,7 +149,7 @@ app.post("/download", async (request, response) => {
                 .on("close", () => resolve());
         });
 
-        const downloadedFiles = await fs.readdir(downloadsDir);
+        const downloadedFiles = await fileSystem.readdir(downloadsDir);
         const rawFilename = downloadedFiles.find((name) => name.startsWith(`${baseName}-raw.`));
         if (!rawFilename) {
             throw new Error("yt-dlp did not produce an output file");
@@ -119,7 +164,7 @@ app.post("/download", async (request, response) => {
             response.write(JSON.stringify({ type: "converting" }) + "\n");
             const convertedPath = path.join(downloadsDir, `${baseName}.mp4`);
             await convertToMp4(rawPath, convertedPath);
-            await fs.unlink(rawPath);
+            await fileSystem.unlink(rawPath);
             finalPath = convertedPath;
             filename = `${baseName}.mp4`;
         }
