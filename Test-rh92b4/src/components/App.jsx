@@ -98,7 +98,7 @@ function formatDuration(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`
 }
 
-function VideoRow({ video, importing, onPreview, onImport }) {
+function VideoRow({ video, importing, onPreview, onImport, onPreviewClip }) {
   const isX = video.source === "x"
   const detail = video.binName
     ? `${formatDuration(video.duration)} · ${video.binName}`
@@ -122,6 +122,11 @@ function VideoRow({ video, importing, onPreview, onImport }) {
           {detail}
         </span>
       </div>
+      {onPreviewClip && (
+        <button className="btn btn--sm" onClick={onPreviewClip}>
+          Preview
+        </button>
+      )}
       {onImport ? (
         <button className="btn btn--primary btn--sm" onClick={onImport} disabled={importing}>
           {importing ? "Importing…" : "Import"}
@@ -146,10 +151,10 @@ export const App = () => {
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [isFetchingUrlInfo, setIsFetchingUrlInfo] = useState(false)
   const [tab, setTab] = useState("results")
-  const testVideoRef = useRef(null)
-  const [testStatus, setTestStatus] = useState("waiting")
   const [bins, setBins] = useState([])
   const [selectedBinId, setSelectedBinId] = useState("")
+  const [clip, setClip] = useState(null)
+  const clipRef = useRef(null)
 
   async function loadBins() {
     try {
@@ -209,6 +214,23 @@ export const App = () => {
       setVideos([])
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  async function openPreview(video) {
+    setClip({ video, status: "loading", url: ""})
+    try{
+      const response = await fetch(`${SERVER_URL}/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: video.url, id: video.id }),
+      })
+      if (!response.ok) throw new Error(`Preview request failed: ${response.status}`)
+        const data = await response.json()
+      setClip({ video, status: "ready", url: data.previewUrl })
+    } catch (err) {
+      console.error(err)
+      setClip({ video, status: "error", url: "" })
     }
   }
 
@@ -382,33 +404,6 @@ export const App = () => {
         </button>
       </div>
     </header>
-    <div className="video-test">
-      <video
-        ref={testVideoRef}
-        width="320"
-        height="180"
-        muted
-        style={{ background: "#400", border: "2px solid red" }}
-        src="http://localhost:3000/previews/test.mp4"
-        onLoadedData={() => setTestStatus("loadeddata")}
-        onCanPlay={() => setTestStatus("canplay")}
-        onPlay={() => setTestStatus("playing")}
-        onEnded={() => setTestStatus("ended")}
-        onError={() => setTestStatus("ERROR")}
-      ></video>
-      <div className="search-row">
-        <button className="btn" onClick={async () => {
-          try {
-            await testVideoRef.current.play()
-            setTestStatus("play() ok")
-          } catch (err) {
-            setTestStatus("play() failed: " + String(err))
-          }
-        }}>Play</button>
-        <button className="btn" onClick={() => testVideoRef.current.pause()}>Pause</button>
-      </div>
-      <p className="status">video status: {testStatus}</p>
-    </div>
 
     {(isLoading || isFetchingUrlInfo) && (
       <div className="loading-box">
@@ -449,6 +444,7 @@ export const App = () => {
               video={alreadyImported(video) ? downloadedVideos.find((v) => v.id === video.id) : video}
               importing={importingId === video.id}
               onPreview={() => setPreviewVideo(video)}
+              onPreviewClip={() => openPreview(video)}
               onImport={alreadyImported(video) ? null : () => handleImport(video)}
             />
           ))}
@@ -475,6 +471,47 @@ export const App = () => {
         <p className="status">Nothing imported yet.</p>
       )
     )}
+    {clip && (
+      <div className="overlay">
+        <div className="overlay-card">
+          <h3 className="preview-title">{clip.video.title}</h3>
+
+          {clip.status === "loading" && (
+            <div className="loading-box">
+              <img className="loading-gif" src="searching.gif" alt="" />
+              <p className="loading">Making preview…</p>
+            </div>
+          )}
+
+          {clip.status === "error" && (
+            <p className="banner"><strong>Error</strong> Couldn't make a preview.</p>
+          )}
+
+          {clip.status === "ready" && (
+            <>
+              <video ref={clipRef} width="300" height="170" autoPlay src={clip.url}></video>
+              <div className="search-row">
+                <button className="btn btn--sm" onClick={() => clipRef.current.play()}>Play</button>
+                <button className="btn btn--sm" onClick={() => clipRef.current.pause()}>Pause</button>
+              </div>
+            </>
+          )}
+
+          <p className="row-meta">{formatDuration(clip.video.duration)}</p>
+          <div className="preview-actions">
+            <button
+              className="btn btn--primary"
+              onClick={() => handleImport(clip.video)}
+              disabled={importingId === clip.video.id || alreadyImported(clip.video)}
+            >
+              {importingId === clip.video.id ? "Importing…" : alreadyImported(clip.video) ? "Imported" : "Import"}
+            </button>
+            <button className="btn" onClick={() => setClip(null)}>Close</button>
+          </div>
+        </div>
+      </div>
+    )}
   </main>
 );
 }
+  
