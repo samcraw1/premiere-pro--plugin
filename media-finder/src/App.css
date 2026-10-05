@@ -1,11 +1,11 @@
 .panel { display: flex; flex-direction: column; gap: 12px; padding: 10px; }
 
 .search-row { display: flex; gap: 6px; }
-.search-input { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 2px; }
+.search-input { flex: 1; min-width: 0; padding: 5px 8px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 2px; appearance: none; -webkit-appearance: none; }
 .search-input::placeholder { color: var(--text-dim); }
 .search-input:focus { outline: none; border-color: var(--accent); }
 
-.btn { padding: 5px 10px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 2px; cursor: pointer; white-space: nowrap; }
+.btn { padding: 5px 10px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 2px; cursor: pointer; white-space: nowrap; appearance: none; -webkit-appearance: none; }
 .btn:hover { background: var(--surface-h); }
 .btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .btn--primary { color: #fff; background: var(--accent); border-color: var(--accent); }
