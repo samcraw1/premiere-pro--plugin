@@ -115,7 +115,7 @@ app.post("/preview", async (request, response) => {
 
     try {
         await ytDlpWrap.execPromise([
-           "-f", "b[height<=360][vcodec^=avc1]/18",
+           "-f", "b[height<=360][vcodec^=avc1]/18/b[height<=480]/w[vcodec^=h264][format_note!=?watermarked]/best",
         "--download-sections", "*0-10",
         "--force-keyframes-at-cuts",
         "--cookies-from-browser", "chrome",
@@ -164,7 +164,9 @@ app.post("/download", async (request, response) => {
                     // Pin the codec, not just the container - YouTube also
                     // serves AV1/VP9 inside mp4 containers, which Premiere
                     // doesn't reliably decode, so ext=mp4 alone isn't enough.
-                    "-f", "bv*[vcodec^=avc1]+ba[ext=m4a]/b[vcodec^=avc1]/best",
+                    // TikTok labels its H.264 "h264" (not "avc1") and also serves
+                    // H.265 and a watermarked copy, hence the third branch.
+                    "-f", "bv*[vcodec^=avc1]+ba[ext=m4a]/b[vcodec^=avc1]/b[vcodec^=h264][format_note!=?watermarked]/best",
                     "--merge-output-format", "mp4",
                     "--ffmpeg-location", ffmpegPath.path,
                     "-o", rawPathTemplate,
@@ -218,7 +220,7 @@ app.get("/thumbnail", async (request, response) => {
     } catch {
         return response.status(400).json({ error: "Invalid URL" });
     }
-    const allowedImageHosts = ["ytimg.com", "twimg.com"];
+    const allowedImageHosts = ["ytimg.com", "twimg.com", "tiktokcdn-us.com", "tiktokcdn.com"];
     const host = parsed.hostname;
     if (!allowedImageHosts.some((d) => host === d || host.endsWith(`.${d}`))) {
         return response.status(400).json({ error: "Unsupported image host" });
