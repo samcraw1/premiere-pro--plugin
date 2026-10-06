@@ -1,116 +1,123 @@
-# Idea: AI assistant panel for Premiere (chat, image search, image generation)
+# Idea: chat panel for Media Finder (find, download, import outside media)
 
-Date: 2026-10-05. Status: idea + notes, nothing built.
+Date: 2026-10-05. Status: idea + notes, nothing built. Updated after comparing
+options and checking what Adobe already ships.
 
-Source: Sam's notes from an earlier chat. The claims below come from those
-notes and were **not re-verified here** unless marked "(checked in this repo)".
-Treat dates, pricing and policy statements as things to confirm before relying
-on them.
+Source: Sam's notes from an earlier chat plus web checks on 2026-10-05. Claims
+are **not re-verified here** unless marked "(checked)" or "(checked in this
+repo)". Confirm dates, pricing and policy before relying on them.
 
-## Goal
+## Decision (current)
 
-A Premiere panel that helps while editing: chat with an AI, find images
-(Google-style search or stock), and/or generate images, then bring the result
-into the project. Example: while cutting a street interview, type "generate a
-dramatic courtroom background for this answer", get a preview, click **Import
-to Project**.
+Build **option B: our own chat panel on the Claude API**, scoped to what Adobe's
+tools do not do: **find, preview, download and import outside media**. Do not
+rebuild what Adobe ships (project organizing, edits, video/sound generation).
 
-The sharper angle (from the notes): a fast **asset assistant** for Sam's editing
-style: reaction images, cutaways, backgrounds and stock footage in one place,
-instead of a generic chatbot.
+## What Adobe already ships (so we skip it)
 
-## Overlap to be aware of
+- **AI Assistant** (checked): public beta in Premiere since 2026-06-18, free in
+  the beta per a reviewer. Works inside the project: makes bins and sorts clips by
+  content, mutes audio, sets opacity, tries to build timelines. Slow on big
+  tasks. Does not bring in outside media (YouTube, X, TikTok, stock). Whether it
+  can create masks is **unverified**. Credit usage is unknown.
+- **Generative Media tool** (checked via search summary; the Adobe page itself
+  returned 403): generates **video** (Firefly, Google Veo, Kling, Luma) and
+  **sound effects** (Adobe model) on the timeline, with reference frames from
+  your sequence. No mention of still images, and no API or extensibility found.
+  Requirements, credits, limits and licensing not retrieved. See the
+  [FAQ](https://helpx.adobe.com/premiere/desktop/edit-projects/edit-with-generative-ai/generative-media-tool-faq.html).
+- Not covered by Adobe (as far as found): importing from YouTube/X/TikTok/
+  Instagram, web image search, still-image generation (unconfirmed).
 
-- Premiere already has an **AI Assistant in beta**, and Adobe announced image
-  generation inside the timeline (notes say September 23).
-- So a generic chatbot or image generator would duplicate Adobe. The value is in
-  a specific workflow: "I need a visual for this joke: find it or make it, then
-  import it."
+## Options compared
 
-## Building blocks
+| | A. Webview (claude.ai / chatgpt.com) | B. Own panel + Claude API | C. Adobe AI Assistant | D. YouTube/X webview |
+|---|---|---|---|---|
+| Works today | Unverified | Yes | Yes (beta only) | Unverified |
+| Build effort | Lowest | Medium | None | Low if URL readable |
+| Cost | Existing plan | Pay per use | Free in beta (credits unknown) | Free |
+| Sees project | No | Yes, via tools | Yes, deeply | No |
+| Imports outside media | No | Yes, via our endpoints | No | Only if panel can read the URL |
+| Main risk | Login popups blocked | API cost, key safety | Beta, not extensible | Cannot read URL, popups, ads |
 
-| Feature | How to build it |
-|---|---|
-| Chat inside Premiere | UXP panel that calls a backend, which sends messages to an AI model |
-| Search internet images | An image-search API; show thumbnails + links to the original source |
-| Search stock photos/video | Pexels API (images and video) |
-| Generate images | An image-generation service such as Adobe Firefly, called from the backend |
-| Import the result | Download the file locally, then `Project.importFiles()` (already used by Media Finder, see `Test-rh92b4/src/components/App.jsx`) |
+- **A** is only a chat window; no project access, no import. Worth a 30-minute
+  test if a free general chat is wanted.
+- **C** already covers organizing and basic edits. Use it, don't rebuild it.
+- **D** is a browser for discovery. Only useful if the panel can read the
+  webview's current URL (unverified); otherwise search + paste already covers it.
+- **B** is the only one that does hands-free "find it, import it".
 
-Notes:
-- UXP panels can make network requests and import files into bins; Media Finder
-  already does both through the local Node server. (checked in this repo)
-- The backend should hold API keys, not the panel.
-- Save downloaded assets in a persistent folder so Premiere can still find them
-  when the project is reopened. Media Finder already saves to
-  `~/Desktop/MediaFinder`. (checked in this repo)
+Also noted in the earlier notes: "Sign in with ChatGPT" (own panel billed to a
+ChatGPT plan, OpenAI models only, no image generation). Availability for a
+personal app is unconfirmed. Claude has no equivalent subscription route for
+third-party apps found; use API auth.
 
-## The "Google Images" catch
+## Option B scope
 
-- Google's Custom Search JSON API is reported closed to new customers, with
-  existing customers required to migrate by **January 1, 2027**. Don't build on
-  it.
-- Alternative: Brave's image-search API. Results come from Brave's index, not
-  Google's.
+Tools the chat would call (all on the local server, key stays server-side):
 
-## Idea: embed ChatGPT in a webview (no API calls)
+| Tool | Does | Reuses |
+|---|---|---|
+| `search_videos(query)` | yt-dlp search | existing `/search` |
+| `get_url_info(url)` | metadata for YouTube/X (TikTok/Instagram later) | existing `/url-info` |
+| `preview(url)` | 10 s clip | existing `/preview` |
+| `download_and_import(url, bin)` | download, then `Project.importFiles()` | existing `/download`, bin picker |
+| `search_images(query)` | stock/web image search | new |
+| `generate_image(prompt)` | image generation API | new, **later** |
 
-The thought: a docked browser inside Premiere where you log in to chatgpt.com and
-use it normally, so there is no API integration or separate billing.
+Example: "find a yellow tiger image and import it into B-roll" means
+`search_images`, pick or show thumbnails, then import. "Find or generate" means
+Claude picks `search_images` first and `generate_image` when nothing fits.
 
-- Premiere UXP has a `<webview>` element. It loads remote https sites if the
-  domain is allowed in the manifest (`webview` permission with `domains`), and
-  it does **not** open new windows or popups. (checked: Adobe WebView docs,
-  see `docs/research-preview-button.md` for links)
-- **Unverified:** whether ChatGPT's login, chat, image upload and downloads work
-  inside that embedded browser. Popup-based sign-in flows are the likely
-  problem, since UXP blocks new windows. Needs a real test in Premiere.
-- Even if it works, the embedded page cannot see the timeline or import
-  generated images on its own; that would need extra integration.
+Out of scope for B: project organizing, edits, masks, video or sound-effect
+generation (Adobe covers these; masks would need an API we have not confirmed).
 
-**First prototype if pursued:** a dockable panel that just opens chatgpt.com.
-Test: sign in, chat, upload an image, download a result. If those work, the
-main need (talk to ChatGPT without leaving Premiere) is solved.
+## Image sources
 
-## Idea: own chat panel using a ChatGPT plan instead of an API key
+- "Google Images" via Google's Custom Search JSON API: reported closed to new
+  customers, with existing customers required to migrate by **2027-01-01**
+  (unverified). Do not build on it. Scraping Google Images breaks terms and
+  breaks often.
+- Alternatives: Brave image-search API (Brave's index, not Google's), Pexels API
+  (stock images and video).
+- Generation: Claude cannot generate images; needs a separate service (Adobe
+  Firefly, OpenAI, Google Imagen). Firefly API access and pricing not yet
+  researched.
+- Licensing: found images need a stored source URL and a check before use in
+  published videos.
 
-- Per the notes, OpenAI documents "Sign in with ChatGPT": eligible requests are
-  charged against the user's ChatGPT plan in an open-source app, after a
-  registration/authorization flow.
-- It does **not** give the panel access to existing ChatGPT conversations or
-  account context.
-- Flow: build a chat panel in Premiere, sign in through the browser, show
-  responses in the panel. It still makes API requests, just billed to the plan.
-- Limitation noted: image generation is **not** supported on this route. Text
-  chat and supported image inputs work; web search depends on model and account
-  policy.
-- Claude: no general subscription route was found for third-party apps.
-  Anthropic points developers to API authentication, so don't assume a Pro/Max
-  allowance can power a custom panel.
+## Webview notes (for A and D)
+
+- Premiere UXP has a `<webview>` that loads remote https sites if domains are
+  listed in the manifest (`webview` permission). No new windows or popups, no
+  wildcards at the top-level domain. (checked: Adobe WebView docs, see
+  `docs/research-preview-button.md`)
+- Unverified: ChatGPT/Claude login, chat, upload and download inside it;
+  YouTube playback and domain coverage (`youtube.com`, `ytimg.com`,
+  `googlevideo.com`, `gstatic.com`); reading the current URL; X login.
+- A webview chat cannot see the timeline or import files on its own.
 
 ## Suggested path
 
-1. **Webview test (cheap, 30 min):** panel that loads chatgpt.com. Record what
-   works (login, chat, upload, download).
-2. **Search to import (first real milestone):** type a phrase, see image
-   thumbnails (Pexels or Brave), pick one, import into the chosen bin. This
-   reuses Media Finder's server, bin picker, Recent list and import code.
-3. **Generate:** describe an image, preview it, import. Firefly or another image
-   API behind the backend.
-4. **Chat refinement:** "make it more dramatic", "find something closer to
-   this". Add the conversational layer once search and import feel good.
+1. **Optional 30-minute webview test:** load chatgpt.com or claude.ai and
+   youtube.com in a test panel. Record what works.
+2. **First milestone (B):** chat tab in the Media Finder panel with
+   `search_videos`, `get_url_info`, `preview`, `download_and_import`. Reuses the
+   server, bin picker, Recent list and import code.
+3. **Add images:** `search_images` (Pexels or Brave), with source links.
+4. **Later:** `generate_image` once a service is chosen (research Firefly API
+   first), and TikTok/Instagram sources per
+   `docs/research-instagram-tiktok.md`.
 
 ## Open questions
 
-- Does ChatGPT sign-in work inside a UXP webview? (test it)
-- Is "Sign in with ChatGPT" available to a personal open-source app, and what is
-  the registration process?
-- Which image source is best for Sam's use: Brave image search, Pexels, or
-  generation first?
-- Should this be a new tab in the existing Media Finder panel or a separate
-  panel?
-- Licensing: found internet images need a source link and a quick check before
-  use in published videos.
+- Which image source first: Pexels, Brave, or generation?
+- Firefly API: access, pricing, commercial-use terms?
+- Does Adobe's Generative Media tool cover stills? (unconfirmed)
+- Can Adobe's AI Assistant create masks? (unverified; needs the beta to test)
+- Can a UXP panel read a webview's current URL?
+- New tab in the Media Finder panel or a separate panel?
+- API key storage and cost cap for the chat route.
 
 ## Reminder
 
