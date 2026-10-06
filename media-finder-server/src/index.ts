@@ -56,6 +56,28 @@ function toSafeBaseName(title: unknown, fallback: string): string {
   return cleaned || fallback
 }
 
+// Only these sites (exact host or any subdomain) may be passed to yt-dlp.
+const ALLOWED_VIDEO_HOSTS = [
+  "youtube.com", "youtu.be",
+  "x.com", "twitter.com", "t.co",
+  "tiktok.com",
+];
+
+// Returns the normalized URL if it is http(s) on an allowed host, else null.
+function validateVideoUrl(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) return null;
+  const host = parsed.hostname.toLowerCase();
+  const allowed = ALLOWED_VIDEO_HOSTS.some((d) => host === d || host.endsWith(`.${d}`));
+  return allowed ? parsed.href : null;
+}
+
 app.use(cors());
 app.use(express.json());
 app.use("/previews", express.static(path.join(process.cwd(), "previews")));
@@ -69,14 +91,9 @@ app.post("/preview", async (request, response) => {
     if(!url || !id) {
         return response.status(400).json({ error: "URL and ID are required" });
     }
-    let parsed: URL;
-    try{
-        parsed = new URL(url); 
-    } catch {
-        return response.status(400).json({ error: "Invalid URL" });
-    }
-    if(!["http:", "https:"].includes(parsed.protocol)) {
-        return response.status(400).json({ error: "Invalid URL protocol" });
+    const videoUrl = validateVideoUrl(url);
+    if (!videoUrl) {
+        return response.status(400).json({ error: "Invalid or unsupported URL" });
     }
 
     const safeId = String(id).replace(/[^a-zA-Z0-9_-]/g, "");
@@ -97,7 +114,7 @@ app.post("/preview", async (request, response) => {
         "--cookies-from-browser", "chrome",
         "--ffmpeg-location", ffmpegPath.path,
         "-o", clipPath,
-        "--", url,
+        "--", videoUrl,
         ])
         return response.status(200).json({ previewUrl: `http://localhost:3000/previews/${safeId}.mp4` });
     } catch (err) {
@@ -113,6 +130,10 @@ app.post("/download", async (request, response) => {
     const video = request.body
     if(!video || !video.url) {
         return response.status(400).json({ error: "Video URL is required" });
+    }
+    const videoUrl = validateVideoUrl(video.url);
+    if (!videoUrl) {
+        return response.status(400).json({ error: "Invalid or unsupported URL" });
     }
 
     // From here on, we've committed to a 200 + streaming NDJSON response,
@@ -132,7 +153,6 @@ app.post("/download", async (request, response) => {
         await new Promise<void>((resolve, reject) => {
             ytDlpWrap
                 .exec([
-                    video.url,
                     "--cookies-from-browser", "chrome",
                     // Pin the codec, not just the container - YouTube also
                     // serves AV1/VP9 inside mp4 containers, which Premiere
@@ -141,6 +161,7 @@ app.post("/download", async (request, response) => {
                     "--merge-output-format", "mp4",
                     "--ffmpeg-location", ffmpegPath.path,
                     "-o", rawPathTemplate,
+                    "--", videoUrl,
                 ])
                 .on("progress", (progress: { percent?: number }) => {
                     response.write(JSON.stringify({ type: "progress", percent: Math.round(progress.percent ?? 0) }) + "\n");
@@ -218,17 +239,16 @@ app.get("/url-info", async (request, response) => {
         return response.status(400).json({ error: "URL is required" });
     }
 
-    try {
-        new URL(url);
-    } catch {
-        return response.status(400).json({ error: "Invalid URL" });
+    const videoUrl = validateVideoUrl(url);
+    if (!videoUrl) {
+        return response.status(400).json({ error: "Invalid or unsupported URL" });
     }
 
     try {
         // Not getVideoInfo() - it silently injects "-f best", which fails
         // outright on videos with no single pre-merged best stream. Plain
         // --dump-json needs no format resolution at all for metadata.
-        const stdout = await ytDlpWrap.execPromise([url, "--dump-json", "--no-warnings", "--cookies-from-browser", "chrome", "--playlist-items", "1"]);
+        const stdout = await ytDlpWrap.execPromise(["--dump-json", "--no-warnings", "--cookies-from-browser", "chrome", "--playlist-items", "1", "--", videoUrl]);
         const entry = JSON.parse(stdout);
         return response.status(200).json({
             id: entry.id,
