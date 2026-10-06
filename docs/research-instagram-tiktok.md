@@ -120,6 +120,74 @@ the content is copyrighted. Fine for a personal tool on content you have rights
 to or are permitted to use. Do not ship it publicly or in the Pixel production
 plugin without rights clearance.
 
+## TikTok: built (branch `tiktok-support`, 2026-10-06)
+
+Paste-a-link works for TikTok. Search is still not possible.
+
+What the probe showed (yt-dlp 2026.08.19, no `curl_cffi`, no login):
+- Two public videos returned full metadata and formats. No impersonation error,
+  so no pip/`curl_cffi` switch was needed. A third (`@nike/.../7552898105033755918`)
+  failed with "Your IP address is blocked from accessing this post", which is
+  per-post, not a general failure.
+- Thumbnails are plain **JPEG** from `*.tiktokcdn-us.com` (signed, with an
+  `x-expires` timestamp, so thumbnails saved in Recent may stop loading later).
+- Formats: `h264_540p_*` (576x1024), `bytevc1_*` (H.265, up to 720p), sometimes a
+  `download` format marked `watermarked`. The H.264 codec is labelled `h264`,
+  **not** `avc1`.
+- `uploader_id` is a long number; the readable handle is in `uploader`.
+
+What changed:
+- **Hardening (all sites):** `validateVideoUrl()` in `media-finder-server/src/index.ts`
+  allows only http(s) on `youtube.com`, `youtu.be`, `x.com`, `twitter.com`,
+  `t.co`, `tiktok.com` (exact host or subdomain). `/download`, `/url-info` and
+  `/preview` return 400 for anything else. All yt-dlp calls now put `--` before
+  the URL. Tested: `file://`, `javascript:`, `evil.com`, `--exec id`,
+  `eviltiktok.com`, `tiktok.com.evil.com` are all rejected.
+- **Local-only server:** listens on `127.0.0.1` and `::1` (both, because
+  `localhost` resolves to `::1` on this Mac). The LAN address no longer reaches
+  it. Own commit, easy to revert. Not tested from the Premiere panel.
+- **Thumbnails:** `/thumbnail` allows `tiktokcdn-us.com` and `tiktokcdn.com`
+  (the second is not seen in the probe; remove it if you want only confirmed hosts).
+- **Formats:** `/download` and `/preview` selectors gained a TikTok branch:
+  `b[vcodec^=h264][format_note!=?watermarked]` (`!=?` is needed because the
+  field is missing on most formats). YouTube picks are unchanged (still 1080p
+  `avc1` for downloads, itag 18 for previews). The `/preview` chain also has
+  `b[height<=480]/w[vcodec^=h264]` before `best`.
+- **Panel:** `detectSource` returns `"tiktok"` for `tiktok.com` and subdomains;
+  rows get a `TT` badge, a pink left edge, and a `@uploader – first 60 chars`
+  title; placeholder reads "YouTube, X or TikTok".
+
+Tested from the command line (not in Premiere): `/url-info`, `/thumbnail`,
+`/preview` (10 s, H.264 + AAC, 576x1024) and the exact `/download` arguments
+(H.264 + AAC mp4) on a public TikTok; YouTube `/url-info`, `/preview`, format
+selection and thumbnail still work. **Not tested:** the panel inside Premiere,
+a real X link, the `/download` route itself on TikTok (the arguments were run
+directly into a scratch folder), and TikTok videos from other regions.
+
+## Instagram: hand-off for Sam
+
+Not started. The shared pieces are done, so what is left is Instagram-specific:
+
+1. **Allow-list:** add `instagram.com` to `ALLOWED_VIDEO_HOSTS` in
+   `media-finder-server/src/index.ts` (`cdninstagram.com` and `fbcdn.net` are
+   image hosts, not video URLs).
+2. **Thumbnail hosts:** add `cdninstagram.com` and `fbcdn.net` to
+   `allowedImageHosts` in `/thumbnail`. Check what the real reel returns first
+   (format, expiry).
+3. **Cookies:** Instagram needs a logged-in session. The server hardcodes
+   `--cookies-from-browser chrome` in four places; make the browser an env var
+   (e.g. `COOKIES_BROWSER` in `.env`) if you want it configurable.
+4. **Panel:** add `"instagram"` to `detectSource` and a `SOURCE_LABELS` entry in
+   `Test-rh92b4/src/components/App.jsx` (text `IG`), plus `--ig` colour, `.row--ig`
+   and `.badge--ig` in the CSS. Title: probably `@uploader – caption`; check
+   which field holds the handle (TikTok used `uploader`, not `uploader_id`).
+5. **Test with a real reel** while logged in to Instagram in Chrome:
+   `./bin/yt-dlp --dump-json --cookies-from-browser chrome -- <url>`; then the
+   four routes. Expect flakiness (see the known yt-dlp issues above) and risk to
+   the logged-in account if you hammer it.
+6. **Format check:** run `-s --print "%(format_id)s | %(vcodec)s"` with the
+   selectors from `/download` and `/preview` to confirm they pick H.264.
+
 ## Suggested order
 
 1. Test a real public TikTok URL and a real Instagram reel (with Chrome logged
