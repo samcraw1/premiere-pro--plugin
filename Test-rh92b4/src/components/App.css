@@ -58,3 +58,6 @@
 
 .overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; justify-content: center; align-items: flex-start; padding-top: 40px; background: rgba(0, 0, 0, 0.75); }
 .overlay-card { display: flex; flex-direction: column; gap: 8px; width: 320px; padding: 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; }
+
+.row--tt { border-left: 3px solid var(--tt); padding-left: 6px; }
+.badge--tt { color: #fff; background: var(--tt); }

@@ -4,15 +4,15 @@ import "./App.css";
 
 const SERVER_URL = "http://localhost:3000";
 
-// UXP's webview can't load YouTube thumbnail images cross-origin directly,
-// so route them through the server's /thumbnail proxy.
 const X_HOSTS = ["x.com", "twitter.com", "mobile.twitter.com", "t.co"]
 
-// "x" for X/Twitter links, otherwise "youtube". Entries saved before sources
-// existed have no `source`, so callers treat a missing value as "youtube".
+// "x" for X/Twitter links, "tiktok" for TikTok, otherwise "youtube". Entries
+// saved before sources existed have no `source`, so callers treat a missing
+// value as "youtube".
 function detectSource(url) {
   try {
     const host = new URL(url).hostname.replace(/^www\./, "")
+    if (host === "tiktok.com" || host.endsWith(".tiktok.com")) return "tiktok"
     return X_HOSTS.includes(host) ? "x" : "youtube"
   } catch {
     return "youtube"
@@ -27,12 +27,30 @@ function xTitle(video) {
   return snippet ? `${handle} – ${snippet}` : handle
 }
 
+// "@handle – first words of the caption". TikTok's uploader_id is a long number;
+// the readable handle is in `uploader`.
+function tiktokTitle(video) {
+  const text = (video.description || video.title || "").replace(/\s+/g, " ").trim()
+  const snippet = text.length > 60 ? `${text.slice(0, 60).trim()}…` : text
+  const handle = video.uploader ? `@${video.uploader}` : "TikTok"
+  return snippet ? `${handle} – ${snippet}` : handle
+}
+
+// Badge text and CSS modifier per source (a missing source means YouTube).
+const SOURCE_LABELS = {
+  youtube: { text: "YT", modifier: "" },
+  x: { text: "X", modifier: "x" },
+  tiktok: { text: "TT", modifier: "tt" },
+}
+
 // URL lookups return .webp thumbnails, which UXP can't draw; swap to the jpg.
 function toJpgThumbnail(url) {
   const match = url.match(/\/vi_webp\/([^/]+)\//)
   return match ? `https://i.ytimg.com/vi/${match[1]}/hqdefault.jpg` : url
 }
 
+// UXP's webview can't load YouTube thumbnail images cross-origin directly,
+// so route them through the server's /thumbnail proxy.
 function proxyThumbnail(video) {
   return {
     ...video,
@@ -99,12 +117,12 @@ function formatDuration(seconds) {
 }
 
 function VideoRow({ video, importing, onPreview, onImport, onPreviewClip }) {
-  const isX = video.source === "x"
+  const label = SOURCE_LABELS[video.source] ?? SOURCE_LABELS.youtube
   const detail = video.binName
     ? `${formatDuration(video.duration)} · ${video.binName}`
     : formatDuration(video.duration)
   return (
-    <li className={`row${isX ? " row--x" : ""}`}>
+    <li className={`row${label.modifier ? ` row--${label.modifier}` : ""}`}>
       <div className="row-thumb-wrap" onClick={onPreview}>
         {video.thumbnail && (
           <img
@@ -118,7 +136,7 @@ function VideoRow({ video, importing, onPreview, onImport, onPreviewClip }) {
       <div className="row-main" onClick={onPreview}>
         <span className="row-title">{video.title}</span>
         <span className="row-meta">
-          <span className={`badge${isX ? " badge--x" : ""}`}>{isX ? "X" : "YT"}</span>
+          <span className={`badge${label.modifier ? ` badge--${label.modifier}` : ""}`}>{label.text}</span>
           {detail}
         </span>
       </div>
@@ -333,6 +351,7 @@ export const App = () => {
         ...proxyThumbnail(video),
         source,
         ...(source === "x" ? { title: xTitle(video) } : {}),
+        ...(source === "tiktok" ? { title: tiktokTitle(video) } : {}),
       }
       setVideos((current) => [item, ...current.filter((v) => v.id !== item.id)])
       setTab("results")
@@ -371,7 +390,7 @@ export const App = () => {
           type="text"
           value={youtubeUrl}
           onChange={(event) => setYoutubeUrl(event.target.value)}
-          placeholder="…or paste a YouTube or X URL"
+          placeholder="…or paste a YouTube, X or TikTok URL"
         />
         <button className="btn" onClick={handlePasteYoutubeUrl} disabled={isFetchingUrlInfo}>
           {isFetchingUrlInfo ? "Fetching…" : "Paste"}
