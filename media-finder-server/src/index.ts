@@ -82,9 +82,16 @@ app.use(cors());
 app.use(express.json());
 app.use("/previews", express.static(path.join(process.cwd(), "previews")));
 
-app.listen(3000, () => {
-  console.log("Server is running on port 3000");
-});
+// Local-only: listen on both loopback addresses so "localhost" works whether
+// it resolves to IPv4 or IPv6, but nothing on the network can reach the server.
+for (const host of ["127.0.0.1", "::1"]) {
+  const server = app.listen(3000, host, () => {
+    console.log(`Server is running on port 3000 (${host})`);
+  });
+  server.on("error", (err) => {
+    console.error(`Could not listen on ${host}:`, err.message);
+  });
+}
 
 app.post("/preview", async (request, response) => {
     const { url, id } = request.body;
