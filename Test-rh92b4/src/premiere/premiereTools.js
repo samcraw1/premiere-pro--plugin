@@ -11,6 +11,8 @@
 //                   createSequence, createSequenceFromClips, cloneSequence, createSubsequence
 //   Timeline        insertClip, overwriteClip, getPlayhead, setPlayhead, getInOut, setInOut,
 //                   getSequenceEnd, removeSelection
+//   Photoshop       openInPhotoshop (via the UXP shell, not a Premiere API)
+//   After Effects   openInAfterEffects (same, via the UXP shell)
 //   Media Encoder   isAMEInstalled, launchEncoder, sendSequenceToAME, sendClipToAME, sendFileToAME,
 //                   startAMEQueue, onRenderEvents, exportStillFrame
 //   Markers         addMarker, listMarkers, moveMarker, removeMarker
@@ -351,27 +353,29 @@ export async function removeSelection(sequence, ripple = false) {
   )
 }
 
-// ==PhotoShop ==
-// PLACEHOLDER: premierepro has no Photoshop API in Premiere 26.5.0 (checked in the debug
-// console), so these throw a TypeError. Do not call them until a Premiere version adds one.
+// == Photoshop ==
+// premierepro has no Photoshop API in Premiere 26.5.0 (checked in the debug console), so this
+// goes through the UXP shell instead. It opens the file in the OS default app for its extension,
+// which is Photoshop only if the user set it that way. Needs the launchProcess permission in
+// manifest.json (the extension must be listed); Premiere asks the user for consent each time.
 
-function getPhotoshop(){
-  return ppro().Photoshop.getPhotoshop()
+/** Opens a local file (e.g. a .psd) via the OS default app. Throws with the shell's message on failure. */
+export async function openInPhotoshop(filePath) {
+  const { shell } = require("uxp")
+  const result = await shell.openPath(filePath, "Open this file in Photoshop")
+  if (result !== "") throw new Error(`Could not open the file: ${result}`)
 }
 
-function requirePhotoshop() {
-  if(! getPhotoshop()) throw new Error("Adobe Photoshop isn't installed.")
-}
+// == After Effects ==
+// Same approach as Photoshop: no After Effects API in premierepro, so this uses the UXP shell.
+// Works for After Effects project files (.aep / .aepx) if After Effects is their default app.
 
-export function isPhotoshopInstalled(){
-  return Boolean(getPhotoshop().isPhotoshopInstalled)
+/** Opens a local After Effects project via the OS default app. Throws with the shell's message on failure. */
+export async function openInAfterEffects(filePath) {
+  const { shell } = require("uxp")
+  const result = await shell.openPath(filePath, "Open this project in After Effects")
+  if (result !== "") throw new Error(`Could not open the file: ${result}`)
 }
-
-export async function launchPhotoshop(){
-  requirePhotoshop()
-  return await getPhotoshop().launchPhotoshop()
-}
-
 
 // == Media Encoder ==
 

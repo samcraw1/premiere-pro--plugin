@@ -12,6 +12,9 @@
     "network": {
       "domains": ["http://localhost:3000"]
     },
+    "launchProcess": {
+      "extensions": [".psd", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".aep", ".aepx"]
+    },
     "webview": {
       "allow": "yes",
       "domains": ["https://*.youtube.com", "https://*.ytimg.com", "https://*.googlevideo.com", "https://*.gstatic.com", "https://*.google.com"]
