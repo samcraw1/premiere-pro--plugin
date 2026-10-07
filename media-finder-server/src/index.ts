@@ -20,7 +20,7 @@ ffmpeg.setFfmpegPath(ffmpegPath.path);
 
 const downloadsDir = process.env.DOWNLOADS_DIR ?? path.join(os.homedir(), "Desktop", "MediaFinder");
 const ytDlpBinaryPath = path.join(process.cwd(), "bin", "yt-dlp");
-const cookiesBrowser = process.env.COOKIES_BROWSER;
+const cookiesBrowser = process.env.COOKIES_BROWSER ?? "chrome";
 
 try {
   await fileSystem.access(ytDlpBinaryPath);
