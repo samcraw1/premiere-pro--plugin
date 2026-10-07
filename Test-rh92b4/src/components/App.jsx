@@ -6,14 +6,19 @@ const SERVER_URL = "http://localhost:3000";
 
 const X_HOSTS = ["x.com", "twitter.com", "mobile.twitter.com", "t.co"]
 
+
+
+
 // "x" for X/Twitter links, "tiktok" for TikTok, otherwise "youtube". Entries
 // saved before sources existed have no `source`, so callers treat a missing
 // value as "youtube".
+// what if we add more social media sources in the future?
+
 function detectSource(url) {
   try {
     const host = new URL(url).hostname.replace(/^www\./, "")
     if (host === "tiktok.com" || host.endsWith(".tiktok.com")) return "tiktok"
-    return X_HOSTS.includes(host) ? "x" : "youtube"
+    return X_HOSTS.includes(host) ? "x" : host === "instagram.com" || host === "cdninstagram.com" || host === "fbcdn.net" ? "instagram" : "youtube"
   } catch {
     return "youtube"
   }
@@ -41,6 +46,7 @@ const SOURCE_LABELS = {
   youtube: { text: "YT", modifier: "" },
   x: { text: "X", modifier: "x" },
   tiktok: { text: "TT", modifier: "tt" },
+  instagram: { text: "IG", modifier: "ig" },
 }
 
 // URL lookups return .webp thumbnails, which UXP can't draw; swap to the jpg.
@@ -421,6 +427,9 @@ export const App = () => {
         <button className={`tab${tab === "recent" ? " tab--active" : ""}`} onClick={() => setTab("recent")}>
           Recent ({downloadedVideos.length})
         </button>
+        <button className={`tab${tab === "youtube" ? " tab--active" : ""}`} onClick={() => setTab("youtube")}>
+          YouTube
+        </button>
       </div>
     </header>
 
@@ -471,6 +480,13 @@ export const App = () => {
       ) : (
         !isLoading && !isFetchingUrlInfo && <p className="status">No results yet. Search or paste a URL.</p>
       )
+    )}
+
+    {tab === "youtube" && (
+      <webview 
+        src="https://www.youtube.com"
+        style={{ width: "100%", height: "400px"}}
+      ></webview>
     )}
 
     {tab === "recent" && (

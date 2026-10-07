@@ -1,6 +1,6 @@
 {
   "id": "Test-rh92b4",
-  "name": "Vide Converter",
+  "name": "Video Converter",
   "version": "1.0.0",
   "main": "index.html",
   "manifestVersion": 5,
@@ -11,6 +11,10 @@
   "requiredPermissions": {
     "network": {
       "domains": ["http://localhost:3000"]
+    },
+    "webview": {
+      "allow": "yes",
+      "domains": ["https://*.youtube.com", "https://*.ytimg.com", "https://*.googlevideo.com", "https://*.gstatic.com", "https://*.google.com"]
     }
   },
   "entrypoints": [
@@ -18,7 +22,7 @@
       "type": "panel",
       "id": "demos",
       "label": {
-        "default": "React Panel"
+        "default": "Video Converter"
       },
       "minimumSize": {
         "width": 320,

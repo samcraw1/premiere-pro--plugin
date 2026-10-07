@@ -18,6 +18,7 @@ ffmpeg.setFfmpegPath(ffmpegPath.path);
 
 const downloadsDir = process.env.DOWNLOADS_DIR ?? path.join(os.homedir(), "Desktop", "MediaFinder");
 const ytDlpBinaryPath = path.join(process.cwd(), "bin", "yt-dlp");
+const cookiesBrowser = process.env.COOKIES_BROWSER;
 
 try {
   await fileSystem.access(ytDlpBinaryPath);
@@ -61,6 +62,7 @@ const ALLOWED_VIDEO_HOSTS = [
   "youtube.com", "youtu.be",
   "x.com", "twitter.com", "t.co",
   "tiktok.com",
+  "instagram.com", "cdninstagram.com", "fbcdn.net",
 ];
 
 // Returns the normalized URL if it is http(s) on an allowed host, else null.
@@ -118,7 +120,7 @@ app.post("/preview", async (request, response) => {
            "-f", "b[height<=360][vcodec^=avc1]/18/b[height<=480]/w[vcodec^=h264][format_note!=?watermarked]/best",
         "--download-sections", "*0-10",
         "--force-keyframes-at-cuts",
-        "--cookies-from-browser", "chrome",
+        "--cookies-from-browser", cookiesBrowser,
         "--ffmpeg-location", ffmpegPath.path,
         "-o", clipPath,
         "--", videoUrl,
@@ -160,7 +162,7 @@ app.post("/download", async (request, response) => {
         await new Promise<void>((resolve, reject) => {
             ytDlpWrap
                 .exec([
-                    "--cookies-from-browser", "chrome",
+                    "--cookies-from-browser", cookiesBrowser,
                     // Pin the codec, not just the container - YouTube also
                     // serves AV1/VP9 inside mp4 containers, which Premiere
                     // doesn't reliably decode, so ext=mp4 alone isn't enough.
@@ -220,7 +222,7 @@ app.get("/thumbnail", async (request, response) => {
     } catch {
         return response.status(400).json({ error: "Invalid URL" });
     }
-    const allowedImageHosts = ["ytimg.com", "twimg.com", "tiktokcdn-us.com", "tiktokcdn.com"];
+    const allowedImageHosts = ["ytimg.com", "twimg.com", "tiktokcdn-us.com", "tiktokcdn.com", `cdninstagram.com`, `fbcdn.net`];
     const host = parsed.hostname;
     if (!allowedImageHosts.some((d) => host === d || host.endsWith(`.${d}`))) {
         return response.status(400).json({ error: "Unsupported image host" });
@@ -257,7 +259,7 @@ app.get("/url-info", async (request, response) => {
         // Not getVideoInfo() - it silently injects "-f best", which fails
         // outright on videos with no single pre-merged best stream. Plain
         // --dump-json needs no format resolution at all for metadata.
-        const stdout = await ytDlpWrap.execPromise(["--dump-json", "--no-warnings", "--cookies-from-browser", "chrome", "--playlist-items", "1", "--", videoUrl]);
+        const stdout = await ytDlpWrap.execPromise(["--dump-json", "--no-warnings", "--cookies-from-browser", cookiesBrowser, "--playlist-items", "1", "--", videoUrl]);
         const entry = JSON.parse(stdout);
         return response.status(200).json({
             id: entry.id,
