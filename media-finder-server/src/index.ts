@@ -3,6 +3,7 @@ import fileSystem from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import express from "express";
 import cors from "cors";
 import ffmpeg from "fluent-ffmpeg";
@@ -81,6 +82,36 @@ function validateVideoUrl(raw: unknown): string | null {
   return allowed ? parsed.href : null;
 }
 
+const scanMediaExtensions = new Set([".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi", ".mp3", ".wav", ".m4a", ".aac"]);
+const scanMaxDepth = 6;
+const scanMaxFiles = 2000;
+
+// Recursively lists media files under dir. Capped on depth and count, skips
+// symlinks and unreadable folders. Callers must only pass a root that is safe
+// to expose (e.g. downloadsDir), never a path taken straight from a request.
+async function scanDir(dir: string, found: string[] = [], depth = 0): Promise<string[]> {
+    if(depth > scanMaxDepth || found.length >= scanMaxFiles) return found;
+
+    let entries;
+    try {
+        entries = await fileSystem.readdir(dir, { withFileTypes: true });
+    } catch {
+        return found;
+    }
+
+    for (const entry of entries) {
+        if(found.length >= scanMaxFiles) break;
+        const full = path.join(dir, entry.name);
+        if(entry.isSymbolicLink()) continue;
+        if(entry.isDirectory()) {
+            await scanDir(full, found, depth + 1);
+        } else if(scanMediaExtensions.has(path.extname(entry.name).toLowerCase())) {
+            found.push(full);
+        }
+    }
+    return found;
+}
+
 app.use(cors());
 app.use(express.json());
 app.use("/previews", express.static(path.join(process.cwd(), "previews")));
@@ -99,22 +130,87 @@ for (const host of ["127.0.0.1", "::1"]) {
 }
 
 const aiScratchDir = path.join(os.tmpdir(), "media-finder-ai");
-const aiTimeoutMs = 60_000;
-const aiSystemPrompt = "You are a concise assistant inside a Premiere Pro media-finder panel. Answer briefly.";
+const aiTimeoutMs = 120_000;
+const mcpServerPath = path.join(process.cwd(), "mcp", "media-tools.mjs");
+const aiTools = ["search_videos", "get_url_info", "propose_import", "propose_move"];
 
-// Runs the Claude CLI headless with no tools and no user config, so each call
-// stays small and cheap. The question goes in over stdin, not argv, so text
-// starting with "-" can't be read as a flag.
-function askClaude(question: string): Promise<string> {
+type MoveProposal = {
+    type: "move";
+    items: { name: string; bin: string }[];
+    targetBin: string;
+};
+
+type ImportProposal = {
+    type: "import";
+    id: string;
+    title: string;
+    url: string;
+    duration?: number;
+    thumbnail?: string;
+    binName?: string;
+};
+
+// Proposals the assistant made during an in-flight /ai-assistant request,
+// keyed by that request's id. An id only exists while its request is running.
+const aiProposals = new Map<string, (ImportProposal | MoveProposal)[]>();
+
+type ProjectClip = { name: string; bin: string };
+type ChatTurn = { role: "user" | "assistant"; text: string };
+
+// The CLI is stateless, so earlier turns ride along in the prompt text.
+function buildAiPrompt(question: string, history: ChatTurn[]) {
+    if(history.length === 0) return question;
+    const lines = history
+        .map((turn) => `${turn.role === "user" ? "User" : "Assistant"}: ${turn.text}`)
+        .join("\n");
+    return `Conversation so far:\n${lines}\n\nUser: ${question}`;
+}
+
+function buildAiSystemPrompt(bins: string[], clips: ProjectClip[]) {
+    const binList = bins.length ? bins.map((name) => `- ${name}`).join("\n") : "(none loaded)";
+    const clipList = clips.length
+        ? clips.map((clip) => `- ${clip.bin ? `${clip.bin} / ` : ""}${clip.name}`).join("\n")
+        : "(none loaded)";
+    return [
+        "You are the assistant inside a Premiere Pro media-finder panel.",
+        "Be brief. Reply in plain text only: no markdown, no asterisks, no headings.",
+        "You can search YouTube (search_videos), look up a pasted URL (get_url_info), and propose imports (propose_import).",
+        "You can also propose moving existing project items into a bin (propose_move), creating the bin if needed.",
+        "propose_import and propose_move never change anything. The user confirms each one with a button, so say you proposed it, never that it was imported or moved.",
+        "For propose_move, copy each item's name and bin exactly as listed under Project items. Match what the user means even if they misspell it.",
+        "You cannot see the user's timeline or clip contents, only the bin and item names below. Answer questions about the project from these lists.",
+        "Project bins:",
+        binList,
+        "Project items (bin / name):",
+        clipList,
+    ].join("\n");
+}
+
+// Runs the Claude CLI headless with only our three MCP tools, no built-in
+// tools and no user config, so each call stays small and cheap. The question
+// goes in over stdin, not argv, so text starting with "-" can't be read as a flag.
+function askClaude(question: string, bins: string[], clips: ProjectClip[], requestId: string): Promise<string> {
+    const mcpConfig = JSON.stringify({
+        mcpServers: {
+            media: {
+                command: process.execPath,
+                args: [mcpServerPath],
+                env: { AI_REQUEST_ID: requestId, MEDIA_SERVER_URL: "http://127.0.0.1:3000" },
+            },
+        },
+    });
+
     return new Promise((resolve, reject) => {
         const child = spawn("claude", [
             "-p",
             "--output-format", "json",
             "--tools", "",
-            "--no-session-persistence",
+            "--allowedTools", ...aiTools.map((name) => `mcp__media__${name}`),
+            "--mcp-config", mcpConfig,
             "--strict-mcp-config",
+            "--no-session-persistence",
             "--setting-sources", "",
-            "--system-prompt", aiSystemPrompt,
+            "--system-prompt", buildAiSystemPrompt(bins, clips),
             "--model", "claude-haiku-4-5-20251001",
         ], { cwd: aiScratchDir, stdio: ["pipe", "pipe", "pipe"] });
 
@@ -149,8 +245,57 @@ function askClaude(question: string): Promise<string> {
     });
 }
 
+// Called by the MCP tool process while a request is running.
+app.post("/ai-assistant/proposals/:requestId", (request, response) => {
+    const proposals = aiProposals.get(request.params.requestId);
+    if(!proposals) {
+        return response.status(404).json({ error: "Unknown request" });
+    }
+    if(proposals.length >= 5) {
+        return response.status(429).json({ error: "Too many proposals for one question" });
+    }
+
+    const body = request.body ?? {};
+
+    if(body.type === "move") {
+        const { items, target_bin } = body;
+        if(!Array.isArray(items) || typeof target_bin !== "string" || !target_bin.trim()) {
+            return response.status(400).json({ error: "items and target_bin are required" });
+        }
+        const cleanItems = items
+            .filter((item: any): item is { name: string; bin: string } => typeof item?.name === "string" && typeof item?.bin === "string")
+            .slice(0, 50)
+            .map((item: { name: string; bin: string }) => ({ name: item.name.slice(0, 120), bin: item.bin.slice(0, 200) }));
+        if(cleanItems.length === 0) {
+            return response.status(400).json({ error: "At least one item is required" });
+        }
+        proposals.push({ type: "move", items: cleanItems, targetBin: target_bin.trim().slice(0, 200) });
+        return response.status(200).json({ ok: true });
+    }
+
+    const { id, title, url, duration, thumbnail, bin_name } = body;
+    if(typeof id !== "string" || typeof title !== "string" || typeof url !== "string") {
+        return response.status(400).json({ error: "id, title and url are required" });
+    }
+    const videoUrl = validateVideoUrl(url);
+    if(!videoUrl) {
+        return response.status(400).json({ error: "Invalid or unsupported URL" });
+    }
+
+    proposals.push({
+        type: "import",
+        id: id.slice(0, 100),
+        title: title.slice(0, 300),
+        url: videoUrl,
+        duration: typeof duration === "number" ? duration : undefined,
+        thumbnail: typeof thumbnail === "string" ? thumbnail : undefined,
+        binName: typeof bin_name === "string" ? bin_name.slice(0, 200) : undefined,
+    });
+    return response.status(200).json({ ok: true });
+});
+
 app.post("/ai-assistant", async (request, response) => {
-    const { questionForAi } = request.body;
+    const { questionForAi, bins, clips, history } = request.body;
 
     if(typeof questionForAi !== "string" || !questionForAi.trim()) {
         return response.status(400).json({ error: "Question for AI is required" });
@@ -158,16 +303,40 @@ app.post("/ai-assistant", async (request, response) => {
     if(questionForAi.length > 2000) {
         return response.status(400).json({ error: "Question for AI is too long" });
     }
+    const binNames: string[] = Array.isArray(bins)
+        ? bins.filter((name): name is string => typeof name === "string").slice(0, 100).map((name) => name.slice(0, 200))
+        : [];
+
+    const projectClips: ProjectClip[] = Array.isArray(clips)
+        ? clips
+            .filter((clip): clip is ProjectClip => typeof clip?.name === "string" && typeof clip?.bin === "string")
+            .slice(0, 300)
+            .map((clip) => ({ name: clip.name.slice(0, 120), bin: clip.bin.slice(0, 200) }))
+        : [];
+
+    const chatHistory: ChatTurn[] = Array.isArray(history)
+        ? history
+            .filter((turn: any): turn is ChatTurn =>
+                (turn?.role === "user" || turn?.role === "assistant") &&
+                typeof turn?.text === "string" && turn.text.trim() !== "")
+            .slice(-6)
+            .map((turn: ChatTurn) => ({ role: turn.role, text: turn.text.slice(0, 1000) }))
+        : [];
+
+    const requestId = randomUUID();
+    aiProposals.set(requestId, []);
     try {
         await fileSystem.mkdir(aiScratchDir, { recursive: true });
-        const answer = await askClaude(questionForAi.trim());
-        return response.status(200).json({ answer });
+        const answer = await askClaude(buildAiPrompt(questionForAi.trim(), chatHistory), binNames, projectClips, requestId);
+        return response.status(200).json({ answer, proposals: aiProposals.get(requestId) ?? [] });
     } catch (err) {
         console.error("AI assistant failed:", err);
         return response.status(500).json({ error: "AI assistant failed" });
+    } finally {
+        aiProposals.delete(requestId);
     }
 });
-    
+
 app.post("/preview", async (request, response) => {
     const { url, id } = request.body;
     if(!url || !id) {

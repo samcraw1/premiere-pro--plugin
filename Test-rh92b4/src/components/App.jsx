@@ -86,6 +86,46 @@ function saveRecent(list) {
   }
 }
 
+const AI_CHAT_KEY = "mediaFinder.aiChat"
+const AI_CHAT_LIMIT = 50
+const AI_HISTORY_TURNS = 6
+const AI_QUESTION_MAX = 2000
+
+// Proposals still pending from a previous session point at project state that
+// may have changed, so they come back as "expired" with no buttons.
+function loadAiChat() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(AI_CHAT_KEY))
+    if (!Array.isArray(parsed)) return []
+    return parsed.map((message) =>
+      Array.isArray(message.proposals)
+        ? {
+            ...message,
+            proposals: message.proposals.map((proposal) =>
+              proposal.status === "pending" || proposal.status === "working"
+                ? { ...proposal, status: "expired" }
+                : proposal
+            ),
+          }
+        : message
+    )
+  } catch {
+    return []
+  }
+}
+
+function saveAiChat(list) {
+  try {
+    localStorage.setItem(AI_CHAT_KEY, JSON.stringify(list))
+  } catch (err) {
+    console.error("Could not save AI chat", err)
+  }
+}
+
+function newMessageId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
 /**
  * @typedef {{ code: 400 | 401 | 403 | 404 | 409 | 500, message: string }} ErrorCodeForDebugging
  */
@@ -98,6 +138,28 @@ function toErrorCode(status) {
 // Walks the bin tree under `folder`, returning a flat list labelled by path
 // ("Footage / B-roll"). getItems() hands back plain ProjectItems, so each one
 // has to be cast to a FolderItem to tell whether it's a bin and to recurse.
+// The assistant is told to answer in plain text, but models slip. Render the
+// bits of markdown that show up in short replies instead of printing raw
+// asterisks: **bold**, `code`, # headings, "- " / "1." lists, line breaks.
+function renderInline(text) {
+  return text.split(/(\*\*[^*]+\*\*)/g).filter(Boolean).map((part, i) =>
+    part.startsWith("**") && part.endsWith("**") && part.length > 4
+      ? <strong key={i}>{part.slice(2, -2)}</strong>
+      : part.replace(/`/g, "")
+  )
+}
+
+function renderAiText(text) {
+  return String(text ?? "").split("\n").map((line, i) => {
+    if (!line.trim()) return <div key={i} className="ai-gap" />
+    const heading = line.match(/^\s*#{1,6}\s+(.*)$/)
+    if (heading) return <div key={i}><strong>{renderInline(heading[1])}</strong></div>
+    const item = line.match(/^\s*(?:[-*\u2022]|\d+[.)])\s+(.*)$/)
+    if (item) return <div key={i} className="ai-item">{"\u2022 "}{renderInline(item[1])}</div>
+    return <div key={i}>{renderInline(line)}</div>
+  })
+}
+
 async function collectBins(premierepro, folder, prefix = "") {
   const found = []
   const items = await folder.getItems()
@@ -112,6 +174,50 @@ async function collectBins(premierepro, folder, prefix = "") {
     const name = prefix ? `${prefix} / ${item.name}` : item.name
     found.push({ id: item.guid?.toString() ?? name, name, item: bin })
     found.push(...(await collectBins(premierepro, bin, name)))
+  }
+  return found
+}
+
+// Names of every non-folder item in the project (clips, sequences, ...), with
+// the bin each lives in, so the assistant can answer questions about them.
+async function collectClips(premierepro, folder, prefix = "") {
+  const found = []
+  const items = await folder.getItems()
+  for (const item of items) {
+    let bin = null
+    try {
+      bin = premierepro.FolderItem.cast(item)
+    } catch {
+      bin = null
+    }
+    if (bin) {
+      const name = prefix ? `${prefix} / ${item.name}` : item.name
+      found.push(...(await collectClips(premierepro, bin, name)))
+    } else {
+      found.push({ name: item.name, bin: prefix })
+    }
+  }
+  return found
+}
+
+// Resolves {name, bin} pairs (as listed by collectClips) back to live
+// ProjectItems so they can be moved. Async, so it runs before any transaction.
+async function findProjectItems(premierepro, folder, wanted, prefix = "") {
+  const found = []
+  const items = await folder.getItems()
+  for (const item of items) {
+    let bin = null
+    try {
+      bin = premierepro.FolderItem.cast(item)
+    } catch {
+      bin = null
+    }
+    if (bin) {
+      const name = prefix ? `${prefix} / ${item.name}` : item.name
+      found.push(...(await findProjectItems(premierepro, bin, wanted, name)))
+    } else if (wanted.has(`${prefix}\u0000${item.name}`)) {
+      found.push(item)
+    }
   }
   return found
 }
@@ -178,9 +284,19 @@ export const App = () => {
   const ytRef = useRef(null)
   const [ytHeight, setYtHeight] = useState(400)
   const aiAssistantRef = useRef(null)
-  const [aiAssistantResponse, setAiAssistantResponse] = useState(null)
+  const [messages, setMessages] = useState(loadAiChat)
   const [isAiAssistantLoading, setIsAiAssistantLoading] = useState(false)
   const [aiQuestion, setAiQuestion] = useState("")
+
+  useEffect(() => {
+    saveAiChat(messages)
+  }, [messages])
+
+  // Keep the newest message in view.
+  useEffect(() => {
+    if (tab !== "ai assistant" || !aiAssistantRef.current) return
+    aiAssistantRef.current.scrollTop = aiAssistantRef.current.scrollHeight
+  }, [messages, isAiAssistantLoading, tab])
   
 
   // Fill the panel below the tab row, and follow panel resizes.
@@ -282,10 +398,10 @@ export const App = () => {
     }
   }
 
-  async function handleImport(video) {
+  async function handleImport(video, binId = selectedBinId) {
     if (downloadedVideos.some((v) => v.id === video.id)) {
       console.log("Video already imported", video)
-      return
+      return true
     }
 
     setImportingId(video.id)
@@ -328,7 +444,7 @@ export const App = () => {
       }
 
       console.log("Downloaded to", result.filePath)
-      const binName = bins.find((b) => b.id === selectedBinId)?.name ?? "Project root"
+      const binName = bins.find((b) => b.id === binId)?.name ?? "Project root"
       setDownloadedVideos((currentVideos) =>
         [{ ...video, url: result.filePath, binName }, ...currentVideos].slice(0, RECENT_LIMIT)
       )
@@ -340,11 +456,13 @@ export const App = () => {
         throw new Error("no active premiere pro project - open a project first")
       }
       // null target bin = project root
-      const targetBin = bins.find((b) => b.id === selectedBinId)?.item ?? null
+      const targetBin = bins.find((b) => b.id === binId)?.item ?? null
       await project.importFiles([result.filePath], true, targetBin, false)
+      return true
     } catch (err) {
       console.error(err)
       setError({ code, message })
+      return false
     } finally {
       setImportingId(null)
     }
@@ -394,27 +512,182 @@ export const App = () => {
     }
   }
 
+  // Proposals name a bin by text; fall back to the bin picked in the panel.
+  function binIdForProposal(proposal) {
+    const wanted = (proposal.binName ?? "").trim().toLowerCase()
+    return bins.find((b) => b.name.toLowerCase() === wanted)?.id ?? selectedBinId
+  }
+
+  function setProposalStatus(messageId, index, status) {
+    setMessages((current) =>
+      current.map((message) =>
+        message.id === messageId
+          ? { ...message, proposals: message.proposals.map((p, i) => (i === index ? { ...p, status } : p)) }
+          : message
+      )
+    )
+  }
+
+  async function confirmMove(messageId, index, proposal) {
+    setProposalStatus(messageId, index, "working")
+    setError(null)
+    let code = 500
+    let message = "Could not move items."
+
+    try {
+      const premierepro = require("premierepro")
+      const project = await premierepro.Project.getActiveProject()
+      if (!project) {
+        code = 404
+        throw new Error("no active premiere pro project - open a project first")
+      }
+      const root = await project.getRootItem()
+
+      const wanted = new Set(proposal.items.map((item) => `${item.bin}\u0000${item.name}`))
+      const matches = await findProjectItems(premierepro, root, wanted)
+      if (matches.length === 0) {
+        code = 404
+        message = "Those items are no longer in the project."
+        throw new Error("no matching project items")
+      }
+
+      const findTarget = async () =>
+        (await collectBins(premierepro, root)).find(
+          (b) => b.name.toLowerCase() === proposal.targetBin.toLowerCase()
+        )
+
+      let target = await findTarget()
+      if (!target) {
+        // Transaction callbacks must be synchronous, so create the bin first,
+        // then look it up again before moving anything into it.
+        project.lockedAccess(() => {
+          project.executeTransaction((compound) => {
+            compound.addAction(root.createBinAction(proposal.targetBin, true))
+          }, "Create bin")
+        })
+        target = await findTarget()
+        if (!target) throw new Error("bin was not created")
+      }
+
+      message = "Created the bin, but moving items failed."
+      project.lockedAccess(() => {
+        project.executeTransaction((compound) => {
+          for (const item of matches) {
+            const action = root.createMoveItemAction(item, target.item)
+            if (action) compound.addAction(action)
+          }
+        }, "Move items to bin")
+      })
+
+      setProposalStatus(messageId, index, "done")
+      await loadBins()
+    } catch (err) {
+      console.error(err)
+      setProposalStatus(messageId, index, "pending")
+      setError({ code, message })
+    }
+  }
+
+  async function confirmProposal(messageId, index, proposal) {
+    setProposalStatus(messageId, index, "working")
+    const ok = await handleImport(
+      { id: proposal.id, title: proposal.title, url: proposal.url, duration: proposal.duration ?? 0, thumbnail: proposal.thumbnail ?? "" },
+      binIdForProposal(proposal)
+    )
+    setProposalStatus(messageId, index, ok ? "done" : "pending")
+  }
+
   async function handleAiAssistantSearch(search) {
+    const question = search.trim()
+    if (!question || isAiAssistantLoading) return
+
+    // Earlier turns only; the new question goes in separately.
+    const history = messages
+      .filter((message) => !message.error)
+      .slice(-AI_HISTORY_TURNS)
+      .map((message) => ({ role: message.role, text: message.text.slice(0, 1000) }))
+
+    setMessages((current) =>
+      [...current, { id: newMessageId(), role: "user", text: question }].slice(-AI_CHAT_LIMIT)
+    )
+    setAiQuestion("")
     setIsAiAssistantLoading(true)
-    setAiAssistantResponse(null)
+
+    let clips = []
+    try {
+      const premierepro = require("premierepro")
+      const project = await premierepro.Project.getActiveProject()
+      if (project) clips = await collectClips(premierepro, await project.getRootItem())
+    } catch (err) {
+      console.error("Could not read project clips", err)
+    }
 
     try {
       const response = await fetch(`${SERVER_URL}/ai-assistant`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ questionForAi: search }),
+        body: JSON.stringify({ questionForAi: question, bins: bins.map((b) => b.name), clips, history }),
       })
 
       if(!response.ok){
         throw new Error(`AI Assistant search failed: ${response.status}`)
       }
       const aiAssistantData = await response.json()
-      setAiAssistantResponse(aiAssistantData)
+      setMessages((current) =>
+        [
+          ...current,
+          {
+            id: newMessageId(),
+            role: "assistant",
+            text: aiAssistantData.answer,
+            proposals: (aiAssistantData.proposals ?? []).map((proposal) => ({ ...proposal, status: "pending" })),
+          },
+        ].slice(-AI_CHAT_LIMIT)
+      )
     } catch (err) {
       console.error(err)
+      setMessages((current) =>
+        [...current, { id: newMessageId(), role: "assistant", text: "Something went wrong. Try again.", error: true }].slice(-AI_CHAT_LIMIT)
+      )
     } finally {
       setIsAiAssistantLoading(false)
     }
+  }
+
+  function renderProposal(messageId, proposal, index) {
+    const isMove = proposal.type === "move"
+    const status = proposal.status ?? "pending"
+    const statusLabel = { working: "Working…", done: "Done", dismissed: "Dismissed", expired: "Expired" }[status]
+    return (
+      <div className={`ai-proposal${statusLabel ? " ai-proposal--resolved" : ""}`} key={`${proposal.type}-${index}`}>
+        <div className="ai-proposal-text">
+          <span className="ai-proposal-title">
+            {isMove
+              ? `Move ${proposal.items.length} item${proposal.items.length === 1 ? "" : "s"} into "${proposal.targetBin}"`
+              : proposal.title}
+          </span>
+          <span className="ai-proposal-bin">
+            {isMove
+              ? `${proposal.items.slice(0, 3).map((item) => item.name).join(", ")}${proposal.items.length > 3 ? ` +${proposal.items.length - 3} more` : ""}`
+              : `Import into: ${bins.find((b) => b.id === binIdForProposal(proposal))?.name ?? "Project root"}`}
+          </span>
+        </div>
+        {statusLabel ? (
+          <span className="ai-proposal-status">{statusLabel}</span>
+        ) : (
+          <>
+            <button
+              className="btn"
+              disabled={!isMove && importingId !== null}
+              onClick={() => (isMove ? confirmMove(messageId, index, proposal) : confirmProposal(messageId, index, proposal))}
+            >
+              Confirm
+            </button>
+            <button className="btn" onClick={() => setProposalStatus(messageId, index, "dismissed")}>Dismiss</button>
+          </>
+        )}
+      </div>
+    )
   }
 
   const alreadyImported = (video) => downloadedVideos.some((v) => v.id === video.id)
@@ -534,11 +807,30 @@ export const App = () => {
     
     {tab === "ai assistant" && (
       <section>
-        <div className="ai-assistant-section">
+        <div className="ai-chat">
+          <div className="ai-log" ref={aiAssistantRef}>
+            {messages.length === 0 && !isAiAssistantLoading && (
+              <p className="status">Ask about your project, or tell me what to find and import.</p>
+            )}
+            {messages.map((message) => (
+              <div key={message.id} className={`ai-msg ai-msg--${message.role}${message.error ? " ai-msg--error" : ""}`}>
+                <div className="ai-bubble">
+                  {message.role === "assistant" ? renderAiText(message.text) : message.text}
+                </div>
+                {(message.proposals ?? []).map((proposal, index) => renderProposal(message.id, proposal, index))}
+              </div>
+            ))}
+            {isAiAssistantLoading && (
+              <div className="ai-msg ai-msg--assistant">
+                <div className="ai-bubble ai-bubble--thinking">Thinking…</div>
+              </div>
+            )}
+          </div>
           <div className="ai-input-row">
             <input
               type="text"
               placeholder="Ask the AI Assistant"
+              maxLength={AI_QUESTION_MAX}
               value={aiQuestion}
               disabled={isAiAssistantLoading}
               onChange={(e) => setAiQuestion(e.target.value)}
@@ -556,23 +848,12 @@ export const App = () => {
               Send
             </button>
           </div>
-          {isAiAssistantLoading && (
-            <div className="loading-box">
-              <img className="loading-gif" src="searching.gif" alt="" />
-              <p className="loading">Thinking…</p>
-            </div>
-          )}
-          {aiAssistantResponse && (
-            <div className="ai-assistant-response">{aiAssistantResponse.answer}</div>
-          )}
-          {aiAssistantResponse && (
-            <button className="btn" onClick={() => setAiAssistantResponse(null)}>Close</button>
+          {messages.length > 0 && (
+            <button className="btn ai-clear" onClick={() => setMessages([])}>Clear chat</button>
           )}
         </div>
       </section>
     )}
-
-
 
     {tab === "youtube" && (
       <webview
