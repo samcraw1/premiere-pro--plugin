@@ -481,8 +481,8 @@ export async function transcribeClip(item, language) {
   return await ppro().Transcript.transcribeClipProjectItem(asClip(item), language ? { language } : undefined)
 }
 
-export function hasTranscript(item) {
-  return ppro().Transcript.hasTranscript(asClip(item))
+export function hasTranscript(transcriptItem) {
+  return ppro().Transcript.hasTranscript(asClip(transcriptItem))
 }
 
 export function isLanguagePackAvailable(language) {
@@ -495,16 +495,87 @@ export function supportedLanguages() {
 }
 
 /** The clip's transcript as a JSON string. */
-export async function exportTranscriptJSON(item) {
-  return await ppro().Transcript.exportToJSON(asClip(item))
+export async function exportTranscriptJSON(transcriptItem) {
+  return await ppro().Transcript.exportToJSON(asClip(transcriptItem))
 }
 
 /** Attaches transcript text (a JSON string in the format exportTranscriptJSON produces) to a clip. */
-export async function importTranscriptJSON(item, jsonString) {
+export async function importTranscriptJSON(transcriptItem, jsonString) {
   const project = await getProject()
-  const clip = asClip(item)
+  const clip = asClip(transcriptItem)
   const segments = ppro().Transcript.importFromJSON(jsonString)
   return runTransaction(project, "Import transcript", (add) =>
     add(ppro().Transcript.createImportTextSegmentsAction(segments, clip))
   )
+}
+
+export async function adjustAudio(audioTrackItem, deltaDb) {
+  const project = await getProject()
+// grab the audio track from the clip
+ const chain = await audioTrackItem.getComponentChain()
+  if(!chain || (await chain.getComponentCount()) === 0) throw new Error("Missing audio track")
+  //find the volume component within the chain
+
+  const componentCount = await chain.getComponentCount()
+    let volumeComponent = null
+
+for (let i = 0; i < componentCount; i++){
+  const component = await chain.getComponentAtIndex(i)
+  if(await component.getDisplayName() === "Volume"){
+    volumeComponent = component
+    break
+  }
+}
+if(!volumeComponent) throw new Error("Missing volume component")
+  
+  
+  const level = await volumeComponent.getParamCount()
+    if(!level) throw new Error("Missing audio level")
+  let levelParam = null
+
+    for (let i = 0; i < level; i++){
+      const param = await volumeComponent.getParam(i)
+      if(param.displayName === "Level"){
+        levelParam = param
+        break
+      }
+    }
+    if(!levelParam) throw new Error("Missing audio level parameter")
+
+  if(levelParam.isTimeVarying()){
+    throw new Error("Time-varying audio levels are not supported yet")
+  }
+
+  const levelValue = (await levelParam.getStartValue()).value.value
+  const newLevelValue = levelValue * 10 ** (deltaDb / 20)
+
+  runTransaction(project, "Adjust audio level", (add) =>
+    add(levelParam.createSetValueAction(levelParam.createKeyframe(newLevelValue)))
+  )
+  return newLevelValue
+}
+
+/**
+ * Applies adjustAudio to every audio clip selected on the active timeline.
+ * Selected video clips are skipped. Returns how many clips were changed.
+ */
+export async function adjustSelectedAudio(deltaDb) {
+  const sequence = await getActiveSequence()
+  if (!sequence) throw new Error("No active sequence - open a sequence first.")
+  const selected = await (await sequence.getSelection()).getTrackItems()
+
+  let changed = 0
+  let firstError = null
+  for (const trackItem of selected) {
+    try {
+      await adjustAudio(trackItem, deltaDb)
+      changed++
+    } catch (err) {
+      firstError = firstError ?? err
+    }
+  }
+  if (changed === 0) {
+    throw firstError ?? new Error("Select an audio clip on the timeline first.")
+  }
+  return changed
 }

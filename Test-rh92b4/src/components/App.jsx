@@ -2,7 +2,7 @@ import React from "react";
 import { useState, useEffect, useRef } from "react";
 import "./App.css";
 import * as premiereTools from "../premiere/premiereTools";
-import { getProject, collectBins, collectClips, findProjectItems, importFiles, createBin, moveItemsToBin } from "../premiere/premiereTools";
+import { getProject, collectBins, collectClips, findProjectItems, importFiles, createBin, moveItemsToBin, adjustSelectedAudio } from "../premiere/premiereTools";
 
 // Debug console access: in UXP Developer Tool > Debug, run e.g. premiereTools.listSequences()
 if (typeof window !== "undefined") window.premiereTools = premiereTools;
@@ -507,6 +507,19 @@ export const App = () => {
     }
   }
 
+  async function confirmAudio(messageId, index, proposal) {
+    setProposalStatus(messageId, index, "working")
+    setError(null)
+    try {
+      await adjustSelectedAudio(proposal.deltaDb)
+      setProposalStatus(messageId, index, "done")
+    } catch (err) {
+      console.error(err)
+      setProposalStatus(messageId, index, "pending")
+      setError({ code: 500, message: err.message || "Could not adjust the audio." })
+    }
+  }
+
   async function confirmProposal(messageId, index, proposal) {
     setProposalStatus(messageId, index, "working")
     const ok = await handleImport(
@@ -574,20 +587,25 @@ export const App = () => {
 
   function renderProposal(messageId, proposal, index) {
     const isMove = proposal.type === "move"
+    const isAudio = proposal.type === "audio"
     const status = proposal.status ?? "pending"
     const statusLabel = { working: "Working…", done: "Done", dismissed: "Dismissed", expired: "Expired" }[status]
     return (
       <div className={`ai-proposal${statusLabel ? " ai-proposal--resolved" : ""}`} key={`${proposal.type}-${index}`}>
         <div className="ai-proposal-text">
           <span className="ai-proposal-title">
-            {isMove
-              ? `Move ${proposal.items.length} item${proposal.items.length === 1 ? "" : "s"} into "${proposal.targetBin}"`
-              : proposal.title}
+            {isAudio
+              ? `Adjust audio by ${proposal.deltaDb > 0 ? "+" : ""}${proposal.deltaDb} dB`
+              : isMove
+                ? `Move ${proposal.items.length} item${proposal.items.length === 1 ? "" : "s"} into "${proposal.targetBin}"`
+                : proposal.title}
           </span>
           <span className="ai-proposal-bin">
-            {isMove
-              ? `${proposal.items.slice(0, 3).map((item) => item.name).join(", ")}${proposal.items.length > 3 ? ` +${proposal.items.length - 3} more` : ""}`
-              : `Import into: ${bins.find((b) => b.id === binIdForProposal(proposal))?.name ?? "Project root"}`}
+            {isAudio
+              ? "Applies to the audio clips selected on the timeline"
+              : isMove
+                ? `${proposal.items.slice(0, 3).map((item) => item.name).join(", ")}${proposal.items.length > 3 ? ` +${proposal.items.length - 3} more` : ""}`
+                : `Import into: ${bins.find((b) => b.id === binIdForProposal(proposal))?.name ?? "Project root"}`}
           </span>
         </div>
         {statusLabel ? (
@@ -596,8 +614,14 @@ export const App = () => {
           <>
             <button
               className="btn"
-              disabled={!isMove && importingId !== null}
-              onClick={() => (isMove ? confirmMove(messageId, index, proposal) : confirmProposal(messageId, index, proposal))}
+              disabled={!isMove && !isAudio && importingId !== null}
+              onClick={() =>
+                isAudio
+                  ? confirmAudio(messageId, index, proposal)
+                  : isMove
+                    ? confirmMove(messageId, index, proposal)
+                    : confirmProposal(messageId, index, proposal)
+              }
             >
               Confirm
             </button>

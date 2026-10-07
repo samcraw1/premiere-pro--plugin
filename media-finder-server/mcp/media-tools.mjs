@@ -67,6 +67,20 @@ const tools = [
             required: ["items", "target_bin"],
         },
     },
+    {
+        name: "propose_audio_adjust",
+        description:
+            "Propose raising or lowering the volume of the audio clips the user has selected on the timeline, by a number of dB. " +
+            "Negative lowers, positive raises (e.g. -6 for 'turn it down 6 dB'). " +
+            "This does NOT change anything: the user sees a confirm button and decides.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                delta_db: { type: "number", description: "Change in dB, e.g. -6 or 3" },
+            },
+            required: ["delta_db"],
+        },
+    },
 ];
 
 async function callServer(path, options) {
@@ -103,6 +117,15 @@ const handlers = {
             body: JSON.stringify({ type: "move", items, target_bin }),
         });
         return { status: "proposed", note: "The user will see a confirm button. Do not say it was moved." };
+    },
+    async propose_audio_adjust({ delta_db }) {
+        if (!REQUEST_ID) throw new Error("No request id; cannot record a proposal");
+        await callServer(`/ai-assistant/proposals/${encodeURIComponent(REQUEST_ID)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "audio", delta_db }),
+        });
+        return { status: "proposed", note: "The user will see a confirm button. Do not say the volume was changed." };
     },
 };
 

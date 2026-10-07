@@ -132,12 +132,17 @@ for (const host of ["127.0.0.1", "::1"]) {
 const aiScratchDir = path.join(os.tmpdir(), "media-finder-ai");
 const aiTimeoutMs = 120_000;
 const mcpServerPath = path.join(process.cwd(), "mcp", "media-tools.mjs");
-const aiTools = ["search_videos", "get_url_info", "propose_import", "propose_move"];
+const aiTools = ["search_videos", "get_url_info", "propose_import", "propose_move", "propose_audio_adjust"];
 
 type MoveProposal = {
     type: "move";
     items: { name: string; bin: string }[];
     targetBin: string;
+};
+
+type AudioProposal = {
+    type: "audio";
+    deltaDb: number;
 };
 
 type ImportProposal = {
@@ -152,7 +157,7 @@ type ImportProposal = {
 
 // Proposals the assistant made during an in-flight /ai-assistant request,
 // keyed by that request's id. An id only exists while its request is running.
-const aiProposals = new Map<string, (ImportProposal | MoveProposal)[]>();
+const aiProposals = new Map<string, (ImportProposal | MoveProposal | AudioProposal)[]>();
 
 type ProjectClip = { name: string; bin: string };
 type ChatTurn = { role: "user" | "assistant"; text: string };
@@ -176,7 +181,8 @@ function buildAiSystemPrompt(bins: string[], clips: ProjectClip[]) {
         "Be brief. Reply in plain text only: no markdown, no asterisks, no headings.",
         "You can search YouTube (search_videos), look up a pasted URL (get_url_info), and propose imports (propose_import).",
         "You can also propose moving existing project items into a bin (propose_move), creating the bin if needed.",
-        "propose_import and propose_move never change anything. The user confirms each one with a button, so say you proposed it, never that it was imported or moved.",
+        "You can propose raising or lowering the volume of the audio clips the user has selected on the timeline by a number of dB (propose_audio_adjust, negative = quieter).",
+        "propose_import, propose_move and propose_audio_adjust never change anything. The user confirms each one with a button, so say you proposed it, never that it was imported, moved or changed.",
         "For propose_move, copy each item's name and bin exactly as listed under Project items. Match what the user means even if they misspell it.",
         "You cannot see the user's timeline or clip contents, only the bin and item names below. Answer questions about the project from these lists.",
         "Project bins:",
@@ -270,6 +276,15 @@ app.post("/ai-assistant/proposals/:requestId", (request, response) => {
             return response.status(400).json({ error: "At least one item is required" });
         }
         proposals.push({ type: "move", items: cleanItems, targetBin: target_bin.trim().slice(0, 200) });
+        return response.status(200).json({ ok: true });
+    }
+
+    if(body.type === "audio") {
+        const { delta_db } = body;
+        if(typeof delta_db !== "number" || !Number.isFinite(delta_db) || Math.abs(delta_db) > 40) {
+            return response.status(400).json({ error: "delta_db must be a number between -40 and 40" });
+        }
+        proposals.push({ type: "audio", deltaDb: delta_db });
         return response.status(200).json({ ok: true });
     }
 
