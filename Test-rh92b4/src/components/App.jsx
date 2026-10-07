@@ -175,6 +175,30 @@ export const App = () => {
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [isFetchingUrlInfo, setIsFetchingUrlInfo] = useState(false)
   const [tab, setTab] = useState("results")
+  const ytRef = useRef(null)
+  const [ytHeight, setYtHeight] = useState(400)
+  const aiAssistantRef = useRef(null)
+  const [aiAssistantResponse, setAiAssistantResponse] = useState(null)
+  const [isAiAssistantLoading, setIsAiAssistantLoading] = useState(false)
+  const [aiQuestion, setAiQuestion] = useState("")
+  
+
+  // Fill the panel below the tab row, and follow panel resizes.
+  useEffect(() => {
+    if (tab !== "youtube") return
+    const fit = () => {
+      try {
+        const top = ytRef.current.getBoundingClientRect().top
+        const h = Math.floor(window.innerHeight - top)
+        setYtHeight(Number.isFinite(h) && h >= 240 ? h : 400)
+      } catch {
+        setYtHeight(400)
+      }
+    }
+    fit()
+    window.addEventListener("resize", fit)
+    return () => window.removeEventListener("resize", fit)
+  }, [tab])
   const [bins, setBins] = useState([])
   const [selectedBinId, setSelectedBinId] = useState("")
   const [clip, setClip] = useState(null)
@@ -370,6 +394,29 @@ export const App = () => {
     }
   }
 
+  async function handleAiAssistantSearch(search) {
+    setIsAiAssistantLoading(true)
+    setAiAssistantResponse(null)
+
+    try {
+      const response = await fetch(`${SERVER_URL}/ai-assistant`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ questionForAi: search }),
+      })
+
+      if(!response.ok){
+        throw new Error(`AI Assistant search failed: ${response.status}`)
+      }
+      const aiAssistantData = await response.json()
+      setAiAssistantResponse(aiAssistantData)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setIsAiAssistantLoading(false)
+    }
+  }
+
   const alreadyImported = (video) => downloadedVideos.some((v) => v.id === video.id)
 
   return (
@@ -430,6 +477,9 @@ export const App = () => {
         <button className={`tab${tab === "youtube" ? " tab--active" : ""}`} onClick={() => setTab("youtube")}>
           YouTube
         </button>
+        <button className={`tab${tab === "ai assistant" ? " tab--active" : ""}`} onClick={() => setTab("ai assistant")}>
+          AI Assistant
+        </button> 
       </div>
     </header>
 
@@ -481,11 +531,54 @@ export const App = () => {
         !isLoading && !isFetchingUrlInfo && <p className="status">No results yet. Search or paste a URL.</p>
       )
     )}
+    
+    {tab === "ai assistant" && (
+      <section>
+        <div className="ai-assistant-section">
+          <div className="ai-input-row">
+            <input
+              type="text"
+              placeholder="Ask the AI Assistant"
+              value={aiQuestion}
+              disabled={isAiAssistantLoading}
+              onChange={(e) => setAiQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  handleAiAssistantSearch(aiQuestion)
+                }
+              }}
+            />
+            <button
+              className="btn"
+              disabled={isAiAssistantLoading || !aiQuestion.trim()}
+              onClick={() => handleAiAssistantSearch(aiQuestion)}
+            >
+              Send
+            </button>
+          </div>
+          {isAiAssistantLoading && (
+            <div className="loading-box">
+              <img className="loading-gif" src="searching.gif" alt="" />
+              <p className="loading">Thinking…</p>
+            </div>
+          )}
+          {aiAssistantResponse && (
+            <div className="ai-assistant-response">{aiAssistantResponse.answer}</div>
+          )}
+          {aiAssistantResponse && (
+            <button className="btn" onClick={() => setAiAssistantResponse(null)}>Close</button>
+          )}
+        </div>
+      </section>
+    )}
+
+
 
     {tab === "youtube" && (
-      <webview 
+      <webview
+        ref={ytRef}
         src="https://www.youtube.com"
-        style={{ width: "100%", height: "400px"}}
+        style={{ display: "block", width: "auto", height: "500px", margin: "0 -10px -10px" }}
       ></webview>
     )}
 

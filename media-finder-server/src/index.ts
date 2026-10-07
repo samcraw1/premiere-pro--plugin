@@ -2,6 +2,7 @@ import "dotenv/config";
 import fileSystem from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { spawn } from "node:child_process"
 import express from "express";
 import cors from "cors";
 import ffmpeg from "fluent-ffmpeg";
@@ -83,6 +84,8 @@ function validateVideoUrl(raw: unknown): string | null {
 app.use(cors());
 app.use(express.json());
 app.use("/previews", express.static(path.join(process.cwd(), "previews")));
+app.use("/downloads", express.static(downloadsDir));
+
 
 // Local-only: listen on both loopback addresses so "localhost" works whether
 // it resolves to IPv4 or IPv6, but nothing on the network can reach the server.
@@ -95,6 +98,76 @@ for (const host of ["127.0.0.1", "::1"]) {
   });
 }
 
+const aiScratchDir = path.join(os.tmpdir(), "media-finder-ai");
+const aiTimeoutMs = 60_000;
+const aiSystemPrompt = "You are a concise assistant inside a Premiere Pro media-finder panel. Answer briefly.";
+
+// Runs the Claude CLI headless with no tools and no user config, so each call
+// stays small and cheap. The question goes in over stdin, not argv, so text
+// starting with "-" can't be read as a flag.
+function askClaude(question: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const child = spawn("claude", [
+            "-p",
+            "--output-format", "json",
+            "--tools", "",
+            "--no-session-persistence",
+            "--strict-mcp-config",
+            "--setting-sources", "",
+            "--system-prompt", aiSystemPrompt,
+            "--model", "claude-haiku-4-5-20251001",
+        ], { cwd: aiScratchDir, stdio: ["pipe", "pipe", "pipe"] });
+
+        let stdout = "";
+        let stderr = "";
+        const timer = setTimeout(() => {
+            child.kill("SIGKILL");
+            reject(new Error("claude timed out"));
+        }, aiTimeoutMs);
+
+        child.stdout.on("data", (chunk) => { stdout += chunk; });
+        child.stderr.on("data", (chunk) => { stderr += chunk; });
+        child.on("error", (err) => {
+            clearTimeout(timer);
+            reject(err);
+        });
+        child.on("close", (code) => {
+            clearTimeout(timer);
+            if(code !== 0) {
+                return reject(new Error(`claude exited with ${code}: ${stderr.slice(0, 500)}`));
+            }
+            try {
+                const output = JSON.parse(stdout);
+                if(output.is_error) return reject(new Error(output.result ?? "claude returned an error"));
+                resolve(String(output.result ?? ""));
+            } catch {
+                reject(new Error("claude returned unreadable output"));
+            }
+        });
+
+        child.stdin.end(question);
+    });
+}
+
+app.post("/ai-assistant", async (request, response) => {
+    const { questionForAi } = request.body;
+
+    if(typeof questionForAi !== "string" || !questionForAi.trim()) {
+        return response.status(400).json({ error: "Question for AI is required" });
+    }
+    if(questionForAi.length > 2000) {
+        return response.status(400).json({ error: "Question for AI is too long" });
+    }
+    try {
+        await fileSystem.mkdir(aiScratchDir, { recursive: true });
+        const answer = await askClaude(questionForAi.trim());
+        return response.status(200).json({ answer });
+    } catch (err) {
+        console.error("AI assistant failed:", err);
+        return response.status(500).json({ error: "AI assistant failed" });
+    }
+});
+    
 app.post("/preview", async (request, response) => {
     const { url, id } = request.body;
     if(!url || !id) {

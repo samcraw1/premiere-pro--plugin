@@ -61,3 +61,8 @@
 
 .row--tt { border-left: 3px solid var(--tt); padding-left: 6px; }
 .badge--tt { color: #fff; background: var(--tt); }
+
+.ai-assistant-section { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.ai-input-row { display: flex; gap: 6px; width: 80%; }
+.ai-input-row input { flex: 1; min-width: 0; }
+.ai-assistant-response { align-self: stretch; }
