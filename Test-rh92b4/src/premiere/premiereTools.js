@@ -12,7 +12,6 @@
 //   Timeline        insertClip, overwriteClip, getPlayhead, setPlayhead, getInOut, setInOut,
 //                   getSequenceEnd, removeSelection
 //   Photoshop       openInPhotoshop (via the UXP shell, not a Premiere API)
-//   After Effects   openInAfterEffects (same, via the UXP shell)
 //   Media Encoder   isAMEInstalled, launchEncoder, sendSequenceToAME, sendClipToAME, sendFileToAME,
 //                   startAMEQueue, onRenderEvents, exportStillFrame
 //   Markers         addMarker, listMarkers, moveMarker, removeMarker
@@ -141,6 +140,19 @@ export async function importFiles(filePaths, targetFolder = null, project = null
   const target = project ?? (await getProject())
   return await target.importFiles(filePaths, true, targetFolder, false)
 }
+
+export async function importIntoProjectLocal() {
+  const storage = require("uxp").storage
+  const files = await storage.localFileSystem.getFileForOpening({ allowMultiple: true})
+   if (!files || files.length === 0)
+    throw new Error("File picker was cancelled or no file was selected.")
+
+   const filePaths = files.map(file => file.nativePath)
+   
+   return await importFiles(filePaths, null)
+}
+
+
 
 /**
  * Finds a bin by name (case-insensitive, full "A / B" path) or creates it at the project root.
@@ -363,17 +375,6 @@ export async function removeSelection(sequence, ripple = false) {
 export async function openInPhotoshop(filePath) {
   const { shell } = require("uxp")
   const result = await shell.openPath(filePath, "Open this file in Photoshop")
-  if (result !== "") throw new Error(`Could not open the file: ${result}`)
-}
-
-// == After Effects ==
-// Same approach as Photoshop: no After Effects API in premierepro, so this uses the UXP shell.
-// Works for After Effects project files (.aep / .aepx) if After Effects is their default app.
-
-/** Opens a local After Effects project via the OS default app. Throws with the shell's message on failure. */
-export async function openInAfterEffects(filePath) {
-  const { shell } = require("uxp")
-  const result = await shell.openPath(filePath, "Open this project in After Effects")
   if (result !== "") throw new Error(`Could not open the file: ${result}`)
 }
 

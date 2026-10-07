@@ -132,7 +132,7 @@ for (const host of ["127.0.0.1", "::1"]) {
 const aiScratchDir = path.join(os.tmpdir(), "media-finder-ai");
 const aiTimeoutMs = 120_000;
 const mcpServerPath = path.join(process.cwd(), "mcp", "media-tools.mjs");
-const aiTools = ["search_videos", "get_url_info", "propose_import", "propose_move", "propose_audio_adjust"];
+const aiTools = ["search_videos", "get_url_info", "propose_import", "propose_move", "propose_audio_adjust", "search_local_files", "propose_import_local"];
 
 type MoveProposal = {
     type: "move";
@@ -144,6 +144,42 @@ type AudioProposal = {
     type: "audio";
     deltaDb: number;
 };
+
+type LocalImportProposal = {
+    type: "local_import";
+    path?: string; // absent = the panel opens a file picker instead
+};
+
+// Keep these in step with LOCAL_MEDIA_EXTENSIONS / LOCAL_SEARCH_ROOTS in mcp/media-tools.mjs.
+const localMediaExtensions = new Set([
+    ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".mxf",
+    ".m4a", ".mp3", ".wav", ".aif", ".aiff", ".flac", ".aac",
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".psd",
+]);
+const localSearchRoots = ["Downloads", "Desktop", "Movies", "Music"].map((name) => path.join(os.homedir(), name));
+
+// The real path of `raw` if it is an existing media file inside one of the search folders
+// (symlinks resolved, so a link can't point outside them), otherwise null.
+async function resolveLocalMediaPath(raw: unknown): Promise<string | null> {
+    if(typeof raw !== "string" || !path.isAbsolute(raw)) return null;
+    try {
+        const real = await fileSystem.realpath(raw);
+        if(!localMediaExtensions.has(path.extname(real).toLowerCase())) return null;
+        if(!(await fileSystem.stat(real)).isFile()) return null;
+        for(const root of localSearchRoots) {
+            let realRoot: string;
+            try {
+                realRoot = await fileSystem.realpath(root);
+            } catch {
+                continue;
+            }
+            if(real.startsWith(realRoot + path.sep)) return real;
+        }
+    } catch {
+        // missing file or unreadable: fall through to null
+    }
+    return null;
+}
 
 type ImportProposal = {
     type: "import";
@@ -157,7 +193,7 @@ type ImportProposal = {
 
 // Proposals the assistant made during an in-flight /ai-assistant request,
 // keyed by that request's id. An id only exists while its request is running.
-const aiProposals = new Map<string, (ImportProposal | MoveProposal | AudioProposal)[]>();
+const aiProposals = new Map<string, (ImportProposal | MoveProposal | AudioProposal | LocalImportProposal)[]>();
 
 type ProjectClip = { name: string; bin: string };
 type ChatTurn = { role: "user" | "assistant"; text: string };
@@ -182,7 +218,9 @@ function buildAiSystemPrompt(bins: string[], clips: ProjectClip[]) {
         "You can search YouTube (search_videos), look up a pasted URL (get_url_info), and propose imports (propose_import).",
         "You can also propose moving existing project items into a bin (propose_move), creating the bin if needed.",
         "You can propose raising or lowering the volume of the audio clips the user has selected on the timeline by a number of dB (propose_audio_adjust, negative = quieter).",
-        "propose_import, propose_move and propose_audio_adjust never change anything. The user confirms each one with a button, so say you proposed it, never that it was imported, moved or changed.",
+        "You can search the user's Downloads, Desktop, Movies and Music folders for media files by name (search_local_files), then propose importing one into the project root (propose_import_local, passing the path exactly as returned).",
+        "If search_local_files finds nothing useful, call propose_import_local without a path so the user can pick the file themselves. If there are several plausible matches, ask which one instead of guessing.",
+        "propose_import, propose_move, propose_audio_adjust and propose_import_local never change anything. The user confirms each one with a button, so say you proposed it, never that it was imported, moved or changed.",
         "For propose_move, copy each item's name and bin exactly as listed under Project items. Match what the user means even if they misspell it.",
         "You cannot see the user's timeline or clip contents, only the bin and item names below. Answer questions about the project from these lists.",
         "Project bins:",
@@ -252,7 +290,7 @@ function askClaude(question: string, bins: string[], clips: ProjectClip[], reque
 }
 
 // Called by the MCP tool process while a request is running.
-app.post("/ai-assistant/proposals/:requestId", (request, response) => {
+app.post("/ai-assistant/proposals/:requestId", async (request, response) => {
     const proposals = aiProposals.get(request.params.requestId);
     if(!proposals) {
         return response.status(404).json({ error: "Unknown request" });
@@ -276,6 +314,19 @@ app.post("/ai-assistant/proposals/:requestId", (request, response) => {
             return response.status(400).json({ error: "At least one item is required" });
         }
         proposals.push({ type: "move", items: cleanItems, targetBin: target_bin.trim().slice(0, 200) });
+        return response.status(200).json({ ok: true });
+    }
+
+    if(body.type === "local_import") {
+        if(body.path === undefined) {
+            proposals.push({ type: "local_import" });
+            return response.status(200).json({ ok: true });
+        }
+        const resolved = await resolveLocalMediaPath(body.path);
+        if(!resolved) {
+            return response.status(400).json({ error: "Not a media file inside Downloads, Desktop, Movies or Music" });
+        }
+        proposals.push({ type: "local_import", path: resolved });
         return response.status(200).json({ ok: true });
     }
 

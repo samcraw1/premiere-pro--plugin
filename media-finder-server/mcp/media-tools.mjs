@@ -3,9 +3,61 @@
 // media-finder server's own routes, so the assistant can search and propose
 // imports but can't touch files, the shell, or Premiere directly.
 import readline from "node:readline";
+import fileSystem from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 const SERVER_URL = process.env.MEDIA_SERVER_URL ?? "http://127.0.0.1:3000";
 const REQUEST_ID = process.env.AI_REQUEST_ID ?? "";
+
+// Local file search is limited to these folders and media types. The server checks the
+// same lists again before it accepts an import proposal (see resolveLocalMediaPath in index.ts).
+const LOCAL_MEDIA_EXTENSIONS = new Set([
+    ".mp4", ".mov", ".m4v", ".mkv", ".avi", ".webm", ".mxf",
+    ".m4a", ".mp3", ".wav", ".aif", ".aiff", ".flac", ".aac",
+    ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".psd",
+]);
+const LOCAL_SEARCH_ROOTS = ["Downloads", "Desktop", "Movies", "Music"].map((name) => path.join(os.homedir(), name));
+const LOCAL_SEARCH_MAX_RESULTS = 10;
+const LOCAL_SEARCH_MAX_VISITED = 5000;
+const LOCAL_SEARCH_MAX_DEPTH = 4;
+
+// Finds media files whose name contains every word of `term`. Skips hidden entries and
+// symlinks (Dirent reports a symlink as neither file nor directory).
+async function findLocalMedia(term) {
+    const words = String(term).toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
+    if (words.length === 0) return [];
+    const found = [];
+    let visited = 0;
+
+    async function walk(dir, depth) {
+        if (depth > LOCAL_SEARCH_MAX_DEPTH) return;
+        let entries;
+        try {
+            entries = await fileSystem.readdir(dir, { withFileTypes: true });
+        } catch {
+            return;
+        }
+        for (const entry of entries) {
+            if (found.length >= LOCAL_SEARCH_MAX_RESULTS || ++visited > LOCAL_SEARCH_MAX_VISITED) return;
+            if (entry.name.startsWith(".")) continue;
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                await walk(full, depth + 1);
+            } else if (entry.isFile() && LOCAL_MEDIA_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+                const lower = entry.name.toLowerCase();
+                if (words.every((word) => lower.includes(word))) found.push(full);
+            }
+        }
+    }
+
+    for (const root of LOCAL_SEARCH_ROOTS) await walk(root, 0);
+
+    return Promise.all(found.map(async (full) => {
+        const { size } = await fileSystem.stat(full);
+        return { name: path.basename(full), path: full, size };
+    }));
+}
 
 const tools = [
     {
@@ -81,6 +133,30 @@ const tools = [
             required: ["delta_db"],
         },
     },
+    {
+        name: "search_local_files",
+        description:
+            "Search the user's Downloads, Desktop, Movies and Music folders for media files (video, audio, images) " +
+            "whose file name contains all the words in term. Returns up to 10 matches with name, full path and size in bytes. " +
+            "Search by words from the title, not the extension.",
+        inputSchema: {
+            type: "object",
+            properties: { term: { type: "string", description: "Words from the file name" } },
+            required: ["term"],
+        },
+    },
+    {
+        name: "propose_import_local",
+        description:
+            "Propose importing a file from the user's own computer (not a URL) into the project root. " +
+            "Pass path exactly as returned by search_local_files. If you could not find the file, omit path: " +
+            "the confirm button then opens a file picker and the user chooses it themselves. " +
+            "This does NOT import anything until the user confirms.",
+        inputSchema: {
+            type: "object",
+            properties: { path: { type: "string", description: "Full path from search_local_files" } },
+        },
+    },
 ];
 
 async function callServer(path, options) {
@@ -126,6 +202,23 @@ const handlers = {
             body: JSON.stringify({ type: "audio", delta_db }),
         });
         return { status: "proposed", note: "The user will see a confirm button. Do not say the volume was changed." };
+    },
+    async search_local_files({ term }) {
+        return await findLocalMedia(term);
+    },
+    async propose_import_local({ path: filePath } = {}) {
+        if (!REQUEST_ID) throw new Error("No request id; cannot record a proposal");
+        await callServer(`/ai-assistant/proposals/${encodeURIComponent(REQUEST_ID)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(filePath === undefined ? { type: "local_import" } : { type: "local_import", path: filePath }),
+        });
+        return {
+            status: "proposed",
+            note: filePath === undefined
+                ? "The user will see a confirm button that opens a file picker. Do not say anything was imported."
+                : "The user will see a confirm button for that file. Do not say it was imported.",
+        };
     },
 };
 

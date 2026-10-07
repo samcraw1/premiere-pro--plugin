@@ -12,6 +12,7 @@
     "network": {
       "domains": ["http://localhost:3000"]
     },
+    "localFileSystem": "request",
     "launchProcess": {
       "extensions": [".psd", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".aep", ".aepx"]
     },
