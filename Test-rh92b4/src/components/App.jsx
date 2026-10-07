@@ -1,6 +1,11 @@
 import React from "react";
 import { useState, useEffect, useRef } from "react";
 import "./App.css";
+import * as premiereTools from "../premiere/premiereTools";
+import { getProject, collectBins, collectClips, findProjectItems, importFiles, createBin, moveItemsToBin } from "../premiere/premiereTools";
+
+// Debug console access: in UXP Developer Tool > Debug, run e.g. premiereTools.listSequences()
+if (typeof window !== "undefined") window.premiereTools = premiereTools;
 
 const SERVER_URL = "http://localhost:3000";
 
@@ -160,68 +165,6 @@ function renderAiText(text) {
   })
 }
 
-async function collectBins(premierepro, folder, prefix = "") {
-  const found = []
-  const items = await folder.getItems()
-  for (const item of items) {
-    let bin = null
-    try {
-      bin = premierepro.FolderItem.cast(item)
-    } catch {
-      bin = null
-    }
-    if (!bin) continue
-    const name = prefix ? `${prefix} / ${item.name}` : item.name
-    found.push({ id: item.guid?.toString() ?? name, name, item: bin })
-    found.push(...(await collectBins(premierepro, bin, name)))
-  }
-  return found
-}
-
-// Names of every non-folder item in the project (clips, sequences, ...), with
-// the bin each lives in, so the assistant can answer questions about them.
-async function collectClips(premierepro, folder, prefix = "") {
-  const found = []
-  const items = await folder.getItems()
-  for (const item of items) {
-    let bin = null
-    try {
-      bin = premierepro.FolderItem.cast(item)
-    } catch {
-      bin = null
-    }
-    if (bin) {
-      const name = prefix ? `${prefix} / ${item.name}` : item.name
-      found.push(...(await collectClips(premierepro, bin, name)))
-    } else {
-      found.push({ name: item.name, bin: prefix })
-    }
-  }
-  return found
-}
-
-// Resolves {name, bin} pairs (as listed by collectClips) back to live
-// ProjectItems so they can be moved. Async, so it runs before any transaction.
-async function findProjectItems(premierepro, folder, wanted, prefix = "") {
-  const found = []
-  const items = await folder.getItems()
-  for (const item of items) {
-    let bin = null
-    try {
-      bin = premierepro.FolderItem.cast(item)
-    } catch {
-      bin = null
-    }
-    if (bin) {
-      const name = prefix ? `${prefix} / ${item.name}` : item.name
-      found.push(...(await findProjectItems(premierepro, bin, wanted, name)))
-    } else if (wanted.has(`${prefix}\u0000${item.name}`)) {
-      found.push(item)
-    }
-  }
-  return found
-}
-
 function formatDuration(seconds) {
   const mins = Math.floor(seconds / 60)
   const secs = seconds % 60
@@ -322,21 +265,19 @@ export const App = () => {
 
   async function loadBins() {
     try {
-      const premierepro = require("premierepro")
-      const project = await premierepro.Project.getActiveProject()
-      if (!project) {
-        setBins([])
-        setError({ code: 404, message: "No active Premiere project - open a project first." })
-        return
-      }
+      const project = await getProject()
       const root = await project.getRootItem()
-      const found = await collectBins(premierepro, root)
+      const found = await collectBins(root)
       setBins(found)
       setSelectedBinId((current) => (found.some((b) => b.id === current) ? current : ""))
     } catch (err) {
       console.error(err)
       setBins([])
-      setError({ code: 500, message: "Could not load project bins." })
+      setError(
+        err.code === 404
+          ? { code: 404, message: err.message }
+          : { code: 500, message: "Could not load project bins." }
+      )
     }
   }
 
@@ -449,15 +390,16 @@ export const App = () => {
         [{ ...video, url: result.filePath, binName }, ...currentVideos].slice(0, RECENT_LIMIT)
       )
       message = "Downloaded, but importing into Premiere failed."
-      const premierepro = require("premierepro")
-      const project = await premierepro.Project.getActiveProject()
-      if(!project){
+      let project
+      try {
+        project = await getProject()
+      } catch (err) {
         code = 404
-        throw new Error("no active premiere pro project - open a project first")
+        throw err
       }
       // null target bin = project root
       const targetBin = bins.find((b) => b.id === binId)?.item ?? null
-      await project.importFiles([result.filePath], true, targetBin, false)
+      await importFiles([result.filePath], targetBin, project)
       return true
     } catch (err) {
       console.error(err)
@@ -535,49 +477,26 @@ export const App = () => {
     let message = "Could not move items."
 
     try {
-      const premierepro = require("premierepro")
-      const project = await premierepro.Project.getActiveProject()
-      if (!project) {
+      let project
+      try {
+        project = await getProject()
+      } catch (err) {
         code = 404
-        throw new Error("no active premiere pro project - open a project first")
+        throw err
       }
       const root = await project.getRootItem()
 
       const wanted = new Set(proposal.items.map((item) => `${item.bin}\u0000${item.name}`))
-      const matches = await findProjectItems(premierepro, root, wanted)
+      const matches = await findProjectItems(root, wanted)
       if (matches.length === 0) {
         code = 404
         message = "Those items are no longer in the project."
         throw new Error("no matching project items")
       }
 
-      const findTarget = async () =>
-        (await collectBins(premierepro, root)).find(
-          (b) => b.name.toLowerCase() === proposal.targetBin.toLowerCase()
-        )
-
-      let target = await findTarget()
-      if (!target) {
-        // Transaction callbacks must be synchronous, so create the bin first,
-        // then look it up again before moving anything into it.
-        project.lockedAccess(() => {
-          project.executeTransaction((compound) => {
-            compound.addAction(root.createBinAction(proposal.targetBin, true))
-          }, "Create bin")
-        })
-        target = await findTarget()
-        if (!target) throw new Error("bin was not created")
-      }
-
+      const target = await createBin(proposal.targetBin)
       message = "Created the bin, but moving items failed."
-      project.lockedAccess(() => {
-        project.executeTransaction((compound) => {
-          for (const item of matches) {
-            const action = root.createMoveItemAction(item, target.item)
-            if (action) compound.addAction(action)
-          }
-        }, "Move items to bin")
-      })
+      await moveItemsToBin(matches, target)
 
       setProposalStatus(messageId, index, "done")
       await loadBins()
@@ -615,9 +534,8 @@ export const App = () => {
 
     let clips = []
     try {
-      const premierepro = require("premierepro")
-      const project = await premierepro.Project.getActiveProject()
-      if (project) clips = await collectClips(premierepro, await project.getRootItem())
+      const project = await getProject()
+      clips = await collectClips(await project.getRootItem())
     } catch (err) {
       console.error("Could not read project clips", err)
     }
