@@ -351,6 +351,28 @@ export async function removeSelection(sequence, ripple = false) {
   )
 }
 
+// ==PhotoShop ==
+// PLACEHOLDER: premierepro has no Photoshop API in Premiere 26.5.0 (checked in the debug
+// console), so these throw a TypeError. Do not call them until a Premiere version adds one.
+
+function getPhotoshop(){
+  return ppro().Photoshop.getPhotoshop()
+}
+
+function requirePhotoshop() {
+  if(! getPhotoshop()) throw new Error("Adobe Photoshop isn't installed.")
+}
+
+export function isPhotoshopInstalled(){
+  return Boolean(getPhotoshop().isPhotoshopInstalled)
+}
+
+export async function launchPhotoshop(){
+  requirePhotoshop()
+  return await getPhotoshop().launchPhotoshop()
+}
+
+
 // == Media Encoder ==
 
 function getEncoder() {
