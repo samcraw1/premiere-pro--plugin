@@ -64,10 +64,10 @@
 
 .ai-chat { display: flex; flex-direction: column; gap: 8px; }
 .ai-log { display: flex; flex-direction: column; gap: 8px; min-height: 60px; max-height: 320px; overflow-y: auto; padding: 4px 2px; }
-.ai-msg { display: flex; flex-direction: column; gap: 4px; max-width: 85%; }
+.ai-msg { display: flex; flex-direction: column; flex-shrink: 0; gap: 4px; max-width: 85%; }
 .ai-msg--user { align-self: flex-end; align-items: flex-end; }
 .ai-msg--assistant { align-self: flex-start; align-items: stretch; }
-.ai-bubble { padding: 6px 9px; border-radius: 8px; color: var(--text); background: var(--surface); }
+.ai-bubble { flex-shrink: 0; padding: 6px 9px; border-radius: 8px; color: var(--text); background: var(--surface); }
 .ai-msg--user .ai-bubble { color: #fff; background: var(--accent); }
 .ai-bubble--thinking { color: var(--text-dim); }
 .ai-msg--error .ai-bubble { border-left: 3px solid #e5534b; }
